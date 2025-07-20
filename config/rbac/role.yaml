@@ -1,0 +1,65 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - vault.appsre.redhat.com
+  resources:
+  - vaultrestarts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - vault.appsre.redhat.com
+  resources:
+  - vaultrestarts/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - vault.appsre.redhat.com
+  resources:
+  - vaultrestarts/status
+  verbs:
+  - get
+  - patch
+  - update

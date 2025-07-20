@@ -1,0 +1,127 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: vaultrestarts.vault.appsre.redhat.com
+spec:
+  group: vault.appsre.redhat.com
+  names:
+    kind: VaultRestart
+    listKind: VaultRestartList
+    plural: vaultrestarts
+    shortNames:
+    - vr
+    singular: vaultrestart
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.reason
+      name: Reason
+      type: string
+    - jsonPath: .spec.statefulSetName
+      name: StatefulSet
+      type: string
+    - jsonPath: .spec.secretName
+      name: Secret
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: VaultRestart is the Schema for the vaultrestarts API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VaultRestartSpec defines the desired state of VaultRestart.
+            properties:
+              reason:
+                description: Reason specifies why the restart is being performed
+                enum:
+                - cert-rotation
+                - config-change
+                - maintenance
+                - manual
+                type: string
+              secretName:
+                description: SecretName is the name of the Secret to watch for certificate
+                  changes
+                minLength: 1
+                type: string
+              statefulSetName:
+                description: StatefulSetName specifies the name of the Vault StatefulSet
+                  to restart
+                minLength: 1
+                type: string
+            required:
+            - reason
+            - secretName
+            - statefulSetName
+            type: object
+          status:
+            description: VaultRestartStatus defines the observed state of VaultRestart.
+            properties:
+              completionTime:
+                description: CompletionTime is when the restart operation completed
+                format: date-time
+                type: string
+              lastUpdated:
+                description: LastUpdated is the timestamp of the last status update
+                format: date-time
+                type: string
+              message:
+                description: Message provides human-readable information about the
+                  current state
+                type: string
+              observedGeneration:
+                description: StatefulSetName is the name of the StatefulSet being
+                  restarted
+                format: int64
+                type: integer
+              phase:
+                description: Phase represents the current phase of the restart operation
+                enum:
+                - Pending
+                - WaitingForCertPropagation
+                - Validating
+                - InProgress
+                - Completed
+                - Failed
+                type: string
+              secretHash:
+                description: |-
+                  SecretHash is the hash of the secret content when this restart was triggered
+                  This is automatically populated by the operator
+                type: string
+              startTime:
+                description: StartTime is when the restart operation began
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

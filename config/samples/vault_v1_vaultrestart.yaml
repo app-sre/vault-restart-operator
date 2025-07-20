@@ -1,0 +1,9 @@
+apiVersion: vault.appsre.redhat.com/v1
+kind: VaultRestart
+metadata:
+  labels:
+    app.kubernetes.io/name: vault-restart
+    app.kubernetes.io/managed-by: kustomize
+  name: vaultrestart-sample
+spec:
+  # TODO(user): Add fields here

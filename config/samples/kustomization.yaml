@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- vault_v1_vaultrestart.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
