@@ -42,7 +42,6 @@ import (
 )
 
 // VaultRestartReconciler reconciles a VaultRestart object
-
 type VaultRestartReconciler struct {
 	client.Client
 	VaultClient *vaultapi.Client
