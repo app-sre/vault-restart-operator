@@ -279,11 +279,11 @@ func (r *VaultRestartReconciler) handlePendingPhase(ctx context.Context, vr *vau
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// Handle cert propagation wait - SIMPLIFIED VALIDATION
+// Handle cert propagation wait
 func (r *VaultRestartReconciler) handleCertPropagationWait(ctx context.Context, vr *vaultv1.VaultRestart) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Simple validation: check if route certificates match secret certificates
+	// check if route certificates match secret certificates
 	if err := r.validateCertUtilsOperatorComplete(ctx, vr); err != nil {
 		vr.Status.Message = fmt.Sprintf("Waiting for cert-utils-operator: %v", err)
 		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
@@ -383,7 +383,7 @@ func (r *VaultRestartReconciler) handleRestartExecution(ctx context.Context, vr 
 	return ctrl.Result{}, nil
 }
 
-// SIMPLIFIED VALIDATION: Certificate content only
+// validate certificate content in cert-utils-operator
 func (r *VaultRestartReconciler) validateCertUtilsOperatorComplete(ctx context.Context, vr *vaultv1.VaultRestart) error {
 	logger := log.FromContext(ctx)
 
@@ -420,7 +420,7 @@ func (r *VaultRestartReconciler) validateCertUtilsOperatorComplete(ctx context.C
 			continue
 		}
 
-		// Simple check: does the Route's CA match the Secret's CA?
+		// Does the Route's CA match the Secret's CA?
 		if route.Spec.TLS.DestinationCACertificate != currentCACert {
 			return fmt.Errorf("route %s destinationCACertificate not yet updated", route.Name)
 		}
