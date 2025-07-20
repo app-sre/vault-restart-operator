@@ -8,7 +8,7 @@ minimizing downtime and maintaining cluster health throughout the process.
 
 ## Description
 
-// TODO(user): An in-depth paragraph about your project and overview of use
+The operator monitors Kubernetes Secrets that are annotated with `vault.operator/watch: true`. When a Secret with this annotation is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
 
 ## Getting Started
 
@@ -125,19 +125,3 @@ is manually re-applied afterwards.
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
 More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
