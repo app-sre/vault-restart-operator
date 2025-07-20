@@ -1,18 +1,26 @@
 # vault-restart
-// TODO(user): Add simple overview of use/purpose
+
+The **vault-restart-operator** is a Kubernetes controller designed to
+safely orchestrate rolling restarts of HashiCorp Vault clusters using
+the Raft storage backend. It ensures high availability by coordinating
+restarts so that the active Vault node is always restarted last,
+minimizing downtime and maintaining cluster health throughout the process.
 
 ## Description
+
 // TODO(user): An in-depth paragraph about your project and overview of use
 
 ## Getting Started
 
 ### Prerequisites
+
 - go version v1.24.0+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
 ### To Deploy on the cluster
+
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
@@ -111,6 +119,7 @@ previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml
 is manually re-applied afterwards.
 
 ## Contributing
+
 // TODO(user): Add detailed information on how you would like others to contribute to this project
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
@@ -132,4 +141,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
