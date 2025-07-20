@@ -12,6 +12,8 @@ The operator monitors Kubernetes Secrets that are annotated with `vault.operator
 
 ## Getting Started
 
+![operator-workflow](media/vault-operator-workflow.png)
+
 ### Prerequisites
 
 - go version v1.24.0+
@@ -56,6 +58,7 @@ kubectl apply -k config/samples/
 >**NOTE**: Ensure that the samples has default values to test it out.
 
 ### To Uninstall
+
 **Delete the instances (CRs) from the cluster:**
 
 ```sh
@@ -117,11 +120,3 @@ if you create webhooks, you need to use the above command with
 the '--force' flag and manually ensure that any custom configuration
 previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
 is manually re-applied afterwards.
-
-## Contributing
-
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
