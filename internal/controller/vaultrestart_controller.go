@@ -39,7 +39,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // VaultRestartReconciler reconciles a VaultRestart object
@@ -96,7 +95,8 @@ func (r *VaultRestartReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 }
 
-// SetupWithManager sets up the controller with the Manager
+// SetupWithManager is a method used within a controller to
+// register the controller with a controller-runtime Manager
 func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&vaultv1.VaultRestart{}).
@@ -105,13 +105,13 @@ func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		// Watch Secrets with vault.operator/watch label
 		Watches(
-			&source.Kind{Type: &corev1.Secret{}},
+			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.handleSecretChange),
 			builder.WithPredicates(r.vaultSecretPredicate()),
 		).
 		// Watch Routes to detect cert-utils-operator updates
 		Watches(
-			&source.Kind{Type: &routev1.Route{}},
+			&routev1.Route{},
 			handler.EnqueueRequestsFromMapFunc(r.handleRouteChange),
 			builder.WithPredicates(r.vaultRoutePredicate()),
 		).
@@ -121,7 +121,10 @@ func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // Predicate to filter only watched vault secrets
 func (r *VaultRestartReconciler) vaultSecretPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		secret := obj.(*corev1.Secret)
+		secret, ok := obj.(*corev1.Secret)
+		if !ok {
+			return false
+		}
 		return secret.GetLabels()["vault.operator/watch"] == "true"
 	})
 }
@@ -129,20 +132,24 @@ func (r *VaultRestartReconciler) vaultSecretPredicate() predicate.Predicate {
 // Predicate to filter only vault routes
 func (r *VaultRestartReconciler) vaultRoutePredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		route := obj.(*routev1.Route)
+		route, ok := obj.(*routev1.Route)
+		if !ok {
+			return false
+		}
 		return route.GetLabels()["app.kubernetes.io/name"] == "vault"
 	})
 }
 
 // Handle secret changes - auto-create VaultRestart CRs
-func (r *VaultRestartReconciler) handleSecretChange(secret client.Object) []ctrl.Request {
-	ctx := context.Background()
-	logger := log.FromContext(ctx)
+func (r *VaultRestartReconciler) handleSecretChange(ctx context.Context, obj client.Object) []ctrl.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return []ctrl.Request{}
+	}
 
 	// Find which StatefulSet uses this Secret
 	statefulSetName, err := r.findStatefulSetUsingSecret(ctx, secret.GetName(), secret.GetNamespace())
 	if err != nil {
-		logger.Info("Could not find StatefulSet for secret", "secret", secret.GetName(), "error", err)
 		return nil
 	}
 
@@ -153,7 +160,6 @@ func (r *VaultRestartReconciler) handleSecretChange(secret client.Object) []ctrl
 		Namespace: secret.GetNamespace(),
 	}, secretObj)
 	if err != nil {
-		logger.Error(err, "Failed to get secret", "secret", secret.GetName())
 		return nil
 	}
 
@@ -161,7 +167,6 @@ func (r *VaultRestartReconciler) handleSecretChange(secret client.Object) []ctrl
 
 	// Check for existing restart with same hash
 	if r.hasExistingRestartForHash(ctx, secret.GetNamespace(), secret.GetName(), currentHash) {
-		logger.Info("VaultRestart already exists for this secret change", "secret", secret.GetName(), "hash", currentHash)
 		return nil
 	}
 
@@ -183,11 +188,8 @@ func (r *VaultRestartReconciler) handleSecretChange(secret client.Object) []ctrl
 	}
 
 	if err := r.Create(ctx, vr); err != nil {
-		logger.Error(err, "Failed to create VaultRestart CR", "name", vr.Name)
 		return nil
 	}
-
-	logger.Info("AUTO-CREATED VaultRestart CR", "name", vr.Name, "secret", secret.GetName(), "statefulset", statefulSetName)
 
 	return []ctrl.Request{{
 		NamespacedName: types.NamespacedName{
@@ -198,8 +200,11 @@ func (r *VaultRestartReconciler) handleSecretChange(secret client.Object) []ctrl
 }
 
 // Handle route changes - trigger reconciliation for waiting VaultRestarts
-func (r *VaultRestartReconciler) handleRouteChange(route client.Object) []ctrl.Request {
-	ctx := context.Background()
+func (r *VaultRestartReconciler) handleRouteChange(ctx context.Context, obj client.Object) []ctrl.Request {
+	route, ok := obj.(*routev1.Route)
+	if !ok {
+		return []ctrl.Request{}
+	}
 
 	// Find VaultRestart CRs in "WaitingForCertPropagation" phase
 	vaultRestarts := &vaultv1.VaultRestartList{}
