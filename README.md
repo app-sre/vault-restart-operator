@@ -8,7 +8,18 @@ minimizing downtime and maintaining cluster health throughout the process.
 
 ## Description
 
-The operator monitors Kubernetes Secrets that are annotated with `vault.operator/watch: true`. When a Secret with this annotation is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
+Currently, the operator monitors Kubernetes Secrets that are annotated with `vault.operator/watch: true`. When a Secret with this annotation is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
+
+## Example Workflow
+
+When a certificate in a Secret is updated, the operator performs the following steps:
+
+1. cert-manager updates the `vault-tls-secret`.
+2. The operator detects the change in the Secret.
+3. The operator calculates a hash of the Secret's content.
+4. The operator automatically creates a VaultRestart custom resource (CR) for the restart process.
+5. During the first reconciliation, the operator populates the `status.secretHash` field in the CR.
+6. The operator uses the hash to track further changes to the Secret and trigger additional restarts if needed.
 
 ## Getting Started
 
@@ -38,4 +49,9 @@ status:
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
+## Deploying the Operator
+
+## Development
+
+## Roadmap
+
