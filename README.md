@@ -8,7 +8,7 @@ minimizing downtime and maintaining cluster health throughout the process.
 
 ## Description
 
-Currently, the operator monitors Kubernetes Secrets that are annotated with `vault.operator/watch: true`. When a Secret with this annotation is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
+Currently, the operator monitors Kubernetes Secrets that are labeled with `vault.operator/watch: true`. When a Secret with this label is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
 
 ## Example Workflow
 
@@ -55,3 +55,4 @@ status:
 
 ## Roadmap
 
+* Provide ability to restart cluster during upgrades of Vault
