@@ -10,8 +10,11 @@ minimizing downtime and maintaining cluster health throughout the process.
 
 Currently, the operator monitors Kubernetes Secrets that are labeled with `vault.operator/watch: true`. When a Secret with this label is updated—such as when a TLS certificate is rotated—the operator automatically triggers a rolling restart of the associated Vault cluster. This ensures that Vault nodes pick up the new certificate without manual intervention, maintaining security and minimizing downtime.
 
+The operator also monitors Route resources and their associated certificates to ensure that restarts are not triggered when there is a potential certificate mismatch. This helps prevent unnecessary restarts and maintains cluster stability.
+
 ## Example Workflow
 
+The example workflow shows the actions taken by the operator when managing a secret labeled
 When a certificate in a Secret is updated, the operator performs the following steps:
 
 1. cert-manager updates the `vault-tls-secret`.
@@ -21,9 +24,13 @@ When a certificate in a Secret is updated, the operator performs the following s
 5. During the first reconciliation, the operator populates the `status.secretHash` field in the CR.
 6. The operator uses the hash to track further changes to the Secret and trigger additional restarts if needed.
 
+![operator-workflow](media/vault-operator-workflow.png)
+
 ## Getting Started
 
-![operator-workflow](media/vault-operator-workflow.png)
+## Deploying the Operator
+
+This is a cluster-level operator that you can deploy in any namespace, vault-restart-operator is recommended.
 
 ## VaultRestart CR
 
@@ -42,12 +49,22 @@ status:
   lastUpdated: "2025-01-18T10:30:45Z"
 ```
 
-### Prerequisites
+### CR status
 
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+The CR status will display the current Vault Cluster's restart condition. The following table describes the possible status conditions for the `VaultRestart` custom resource:
+
+| Condition Type    | Description                                                                                   |
+|-------------------|----------------------------------------------------------------------------------------------|
+| `Pending`         | The restart process has been requested but has not started yet.                              |
+| `InProgress`      | The operator is actively performing the rolling restart of the Vault cluster.                |
+| `Completed`       | The rolling restart has finished successfully and all Vault pods have been restarted.        |
+| `Failed`          | The restart process encountered an error and could not complete.                             |
+| `SecretHash`      | The hash of the monitored Secret at the time of the restart, used to detect further changes. |
+| `LastUpdated`     | Timestamp of the last update to the status, indicating when the condition last changed.      |
+
+These conditions help track the progress and outcome of each restart operation managed by the operator.
+
+## Development
 
 ## Building the Operator
 
@@ -57,7 +74,12 @@ make docker-build docker-push IMG=""
 
 ## Local Development
 
-## Development
+### Prerequisites
+
+- go version v1.24.0+
+- docker version 17.03+.
+- kubectl version v1.11.3+.
+- Access to a Kubernetes v1.11.3+ cluster.
 
 ## Roadmap
 
