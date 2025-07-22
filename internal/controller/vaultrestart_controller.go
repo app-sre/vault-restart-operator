@@ -548,17 +548,13 @@ func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *va
 	// 5. Restart former leader pod
 	// 6. Verify all pods are healthy
 
-	// For now, simple implementation - restart all pods
+	// For now, just log the pods that would be restarted
+	podNames := make([]string, 0, len(pods.Items))
 	for _, pod := range pods.Items {
-		if err := r.Delete(ctx, &pod); err != nil {
-			return fmt.Errorf("failed to delete pod %s: %w", pod.Name, err)
-		}
-		logger.Info("Deleted pod", "pod", pod.Name)
-
-		// Wait for pod to be recreated and ready
-		time.Sleep(45 * time.Second)
+		podNames = append(podNames, pod.Name)
+		logger.Info("Pod identified for restart:", "pod", pod.Name, "namespace", pod.Namespace, "phase", pod.Status.Phase)
 	}
 
-	logger.Info("Completed vault pod restart sequence", "name", vr.Name)
+	logger.Info("Vault pods that would be restarted:", "podCount", len(podNames), "pods", podNames, "vaultRestart", vr.Name)
 	return nil
 }

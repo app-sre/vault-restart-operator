@@ -49,7 +49,13 @@ status:
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
-## Deploying the Operator
+## Building the Operator
+
+```bash
+make docker-build docker-push IMG=""
+```
+
+## Local Development
 
 ## Development
 
