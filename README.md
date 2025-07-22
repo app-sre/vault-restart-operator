@@ -1,4 +1,4 @@
-# vault-restart
+# vault-restart Operator
 
 The **vault-restart-operator** is a Kubernetes controller designed to
 safely orchestrate rolling restarts of HashiCorp Vault clusters using
@@ -55,4 +55,5 @@ status:
 
 ## Roadmap
 
-* Provide ability to restart cluster during upgrades of Vault
+- Provide ability to restart cluster during upgrades of Vault
+- Evaluate the k8s auth method and its various configurations
