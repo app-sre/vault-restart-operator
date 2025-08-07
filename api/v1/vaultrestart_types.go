@@ -36,7 +36,7 @@ type VaultRestartSpec struct {
 
 	// Reason specifies why the restart is being performed
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=cert-rotation;config-change;maintenance;manual
+	// +kubebuilder:validation:Enum=baseline;cert-rotation;config-change;maintenance;manual
 	Reason string `json:"reason"`
 }
 

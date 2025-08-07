@@ -60,6 +60,7 @@ spec:
               reason:
                 description: Reason specifies why the restart is being performed
                 enum:
+                - baseline
                 - cert-rotation
                 - config-change
                 - maintenance

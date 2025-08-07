@@ -97,6 +97,15 @@ func (r *VaultRestartReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // SetupWithManager is a method used within a controller to
 // register the controller with a controller-runtime Manager
 func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Initialize baselines for existing labeled secrets on startup
+	go func() {
+		// Wait for manager to be ready before initializing
+		<-mgr.Elected()
+		if err := r.initializeBaselines(context.Background()); err != nil {
+			logf.Log.Error(err, "Failed to initialize baselines during startup")
+		}
+	}()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&vaultv1.VaultRestart{}).
 		WithOptions(controller.Options{
@@ -164,12 +173,23 @@ func (r *VaultRestartReconciler) handleSecretChange(ctx context.Context, obj cli
 
 	currentHash := r.calculateSecretHash(secretObj)
 
+	// If this is a newly labeled secret with no existing VaultRestart CRs, create a baseline
+	if !r.hasBaselineForSecret(ctx, secret.GetName(), secret.GetNamespace()) {
+		logger := log.FromContext(ctx)
+		logger.Info("Creating baseline for newly labeled secret", "secret", secret.GetName(), "namespace", secret.GetNamespace())
+
+		if err := r.createBaseline(ctx, secretObj); err != nil {
+			logger.Error(err, "Failed to create baseline for new secret", "secret", secret.GetName())
+		}
+		return nil // Don't trigger restart on first discovery
+	}
+
 	// Check for existing restart with same hash
 	if r.hasExistingRestartForHash(ctx, secret.GetNamespace(), secret.GetName(), currentHash) {
 		return nil
 	}
 
-	// Create VaultRestart CR
+	// Create VaultRestart CR for actual change
 	vr := &vaultv1.VaultRestart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("auto-restart-%s-%d", secret.GetName(), time.Now().Unix()),
@@ -556,5 +576,108 @@ func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *va
 	}
 
 	logger.Info("Vault pods that would be restarted:", "podCount", len(podNames), "pods", podNames, "vaultRestart", vr.Name)
+	return nil
+}
+
+// initializeBaselines scans for existing labeled secrets and creates baseline CRs
+func (r *VaultRestartReconciler) initializeBaselines(ctx context.Context) error {
+	logger := logf.Log.WithName("baseline-init")
+
+	// Find all secrets with vault.operator/watch=true label
+	secretList := &corev1.SecretList{}
+	err := r.List(ctx, secretList, client.MatchingLabels{"vault.operator/watch": "true"})
+	if err != nil {
+		return fmt.Errorf("failed to list watched secrets: %w", err)
+	}
+
+	logger.Info("Scanning for secrets requiring baseline initialization", "secretCount", len(secretList.Items))
+
+	for _, secret := range secretList.Items {
+		// Check if baseline already exists for this secret
+		if r.hasBaselineForSecret(ctx, secret.Name, secret.Namespace) {
+			logger.V(1).Info("Baseline already exists, skipping", "secret", secret.Name, "namespace", secret.Namespace)
+			continue
+		}
+
+		// Create baseline CR for this secret
+		if err := r.createBaseline(ctx, &secret); err != nil {
+			logger.Error(err, "Failed to create baseline", "secret", secret.Name, "namespace", secret.Namespace)
+			continue
+		}
+
+		logger.Info("Created baseline for existing secret", "secret", secret.Name, "namespace", secret.Namespace)
+	}
+
+	logger.Info("Baseline initialization complete")
+	return nil
+}
+
+// hasBaselineForSecret checks if a baseline VaultRestart CR exists for the given secret
+func (r *VaultRestartReconciler) hasBaselineForSecret(ctx context.Context, secretName, namespace string) bool {
+	vaultRestarts := &vaultv1.VaultRestartList{}
+	err := r.List(ctx, vaultRestarts, &client.ListOptions{
+		Namespace: namespace,
+	})
+	if err != nil {
+		return false
+	}
+
+	for _, vr := range vaultRestarts.Items {
+		// Check if this is a restart for the same secret
+		if vr.Spec.SecretName == secretName {
+			return true
+		}
+	}
+
+	return false
+}
+
+// createBaseline creates a baseline VaultRestart CR for a secret in "Completed" state
+func (r *VaultRestartReconciler) createBaseline(ctx context.Context, secret *corev1.Secret) error {
+	// Find the StatefulSet that uses this secret
+	statefulSetName, err := r.findStatefulSetUsingSecret(ctx, secret.Name, secret.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to find StatefulSet for secret %s: %w", secret.Name, err)
+	}
+
+	// Calculate current hash of the secret
+	currentHash := r.calculateSecretHash(secret)
+
+	// Create baseline VaultRestart CR
+	baseline := &vaultv1.VaultRestart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("baseline-%s", secret.Name),
+			Namespace: secret.Namespace,
+			Labels: map[string]string{
+				"vault.operator/trigger": "baseline",
+				"vault.operator/secret":  secret.Name,
+			},
+		},
+		Spec: vaultv1.VaultRestartSpec{
+			StatefulSetName: statefulSetName,
+			SecretName:      secret.Name,
+			Reason:          "baseline",
+		},
+	}
+
+	// Create the CR first (without status)
+	if err := r.Create(ctx, baseline); err != nil {
+		return fmt.Errorf("failed to create baseline CR: %w", err)
+	}
+
+	// Update status separately to mark as completed
+	baseline.Status = vaultv1.VaultRestartStatus{
+		Phase:              "Completed",
+		SecretHash:         currentHash,
+		Message:            "Baseline established during operator initialization",
+		LastUpdated:        &metav1.Time{Time: time.Now()},
+		ObservedGeneration: baseline.Generation,
+		CompletionTime:     &metav1.Time{Time: time.Now()},
+	}
+
+	if err := r.Status().Update(ctx, baseline); err != nil {
+		return fmt.Errorf("failed to update baseline status: %w", err)
+	}
+
 	return nil
 }

@@ -7,3 +7,4 @@ metadata:
   name: vaultrestart-sample
 spec:
   # TODO(user): Add fields here
+  secretName: vault-tls-ca-keypair
