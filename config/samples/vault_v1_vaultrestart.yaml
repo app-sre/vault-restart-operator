@@ -4,7 +4,9 @@ metadata:
   labels:
     app.kubernetes.io/name: vault-restart
     app.kubernetes.io/managed-by: kustomize
-  name: vaultrestart-sample
+  name: vaultrestart-dryrun-test
+  namespace: vault-stage
 spec:
-  # TODO(user): Add fields here
-  secretName: vault-tls-ca-keypair
+  secretName: vault-tls-ca-key-pair
+  statefulSetName: vault
+  reason: manual

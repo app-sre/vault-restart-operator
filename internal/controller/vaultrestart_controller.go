@@ -23,6 +23,7 @@ import (
 	"time"
 
 	vaultv1 "github.com/app-sre/vault-restart-operator/api/v1"
+	"github.com/app-sre/vault-restart-operator/internal/vault"
 	vaultapi "github.com/hashicorp/vault/api"
 	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -49,6 +50,8 @@ type VaultRestartReconciler struct {
 }
 
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
 //+kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch
@@ -549,34 +552,20 @@ func (r *VaultRestartReconciler) validateVaultClusterHealth(ctx context.Context,
 
 // Execute controlled Vault restart sequence
 func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *vaultv1.VaultRestart) error {
-	logger := logf.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// Get Vault pods
-	pods := &corev1.PodList{}
-	err := r.List(ctx, pods, &client.ListOptions{
-		Namespace: vr.Namespace,
-	}, client.MatchingLabels{"app.kubernetes.io/name": "vault"})
-	if err != nil {
-		return fmt.Errorf("failed to list vault pods: %w", err)
+	// Create RestartManager with dry-run enabled for now
+	restartManager := &vault.RestartManager{
+		Client:       r.Client,
+		VaultAddress: "https://vault.vault-stage.svc.cluster.local:8200", // TODO: Make configurable
+		VaultRole:    "vault-operations-role",                            // TODO: Make configurable
+		Namespace:    vr.Namespace,
+		Logger:       logger,
+		DryRun:       true, // Enable dry-run mode for testing
 	}
 
-	// TODO: Implement HashiCorp's recommended restart sequence:
-	// 1. Identify leader vs follower pods
-	// 2. Restart follower pods one by one
-	// 3. Wait for each to rejoin cluster
-	// 4. Perform leader step-down
-	// 5. Restart former leader pod
-	// 6. Verify all pods are healthy
-
-	// For now, just log the pods that would be restarted
-	podNames := make([]string, 0, len(pods.Items))
-	for _, pod := range pods.Items {
-		podNames = append(podNames, pod.Name)
-		logger.Info("Pod identified for restart:", "pod", pod.Name, "namespace", pod.Namespace, "phase", pod.Status.Phase)
-	}
-
-	logger.Info("Vault pods that would be restarted:", "podCount", len(podNames), "pods", podNames, "vaultRestart", vr.Name)
-	return nil
+	// Execute the restart sequence
+	return restartManager.ExecuteRestart(ctx, vr.Spec.StatefulSetName)
 }
 
 // initializeBaselines scans for existing labeled secrets and creates baseline CRs

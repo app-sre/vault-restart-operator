@@ -20,17 +20,73 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	authv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // LoginWithKubernetesAuth authenticates to Vault using the Kubernetes auth method
 func LoginWithKubernetesAuth(ctx context.Context, vaultAddr, role string) (*vaultapi.Client, error) {
+	// Use the default service account token (the one the pod is running with)
+	return LoginWithKubernetesAuthAndToken(ctx, vaultAddr, role, "")
+}
+
+// LoginWithKubernetesAuthAndServiceAccount authenticates to Vault using a specific service account
+func LoginWithKubernetesAuthAndServiceAccount(ctx context.Context, k8sClient client.Client, vaultAddr, role, serviceAccountName, namespace string) (*vaultapi.Client, error) {
 	logger := log.FromContext(ctx)
 
+	// Get the service account token from Kubernetes
+	logger.Info("Getting service account token", "serviceAccount", serviceAccountName, "namespace", namespace)
+	
+	sa := &corev1.ServiceAccount{}
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: serviceAccountName, Namespace: namespace}, sa)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service account %s/%s: %w", namespace, serviceAccountName, err)
+	}
+
+	// Use TokenRequest API to create a short-lived token for the service account
+	logger.Info("Requesting token for service account using TokenRequest API")
+	
+	// Create a TokenRequest for 1 hour expiration
+	expirationSeconds := int64(3600) // 1 hour
+	tokenRequest := &authv1.TokenRequest{
+		Spec: authv1.TokenRequestSpec{
+			ExpirationSeconds: &expirationSeconds,
+		},
+	}
+
+	// Use the SubResource method to create the token
+	err = k8sClient.SubResource("token").Create(ctx, sa, tokenRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token for service account %s/%s: %w", namespace, serviceAccountName, err)
+	}
+
+	if tokenRequest.Status.Token == "" {
+		return nil, fmt.Errorf("empty token returned for service account %s/%s", namespace, serviceAccountName)
+	}
+
+	logger.Info("Successfully created token for service account", 
+		"serviceAccount", serviceAccountName, 
+		"namespace", namespace,
+		"tokenLength", len(tokenRequest.Status.Token),
+		"expiresAt", tokenRequest.Status.ExpirationTimestamp.Time)
+
+	return LoginWithKubernetesAuthAndToken(ctx, vaultAddr, role, tokenRequest.Status.Token)
+}
+
+// LoginWithKubernetesAuthAndToken authenticates to Vault using a specific JWT token
+func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtToken string) (*vaultapi.Client, error) {
+	logger := log.FromContext(ctx)
+
+	logger.Info("Creating Vault client", "address", vaultAddr)
 	config := vaultapi.DefaultConfig()
 	config.Address = vaultAddr
+	config.Timeout = 30 * time.Second
 
 	// Configure TLS if needed
 	config.ConfigureTLS(&vaultapi.TLSConfig{
@@ -43,12 +99,21 @@ func LoginWithKubernetesAuth(ctx context.Context, vaultAddr, role string) (*vaul
 		return nil, fmt.Errorf("failed to create vault client: %w", err)
 	}
 
-	// Get the JWT token from the Kubernetes service account
-	jwt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read service account token: %w", err)
+	var jwt []byte
+	
+	if jwtToken == "" {
+		logger.Info("Reading default service account token")
+		// Get the JWT token from the default Kubernetes service account
+		jwt, err = os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+		if err != nil {
+			return nil, fmt.Errorf("failed to read service account token: %w", err)
+		}
+	} else {
+		logger.Info("Using provided JWT token")
+		jwt = []byte(jwtToken)
 	}
 
+	logger.Info("Attempting Vault login", "role", role, "jwtLength", len(jwt))
 	data := map[string]interface{}{
 		"role": role,
 		"jwt":  string(jwt),
@@ -56,6 +121,7 @@ func LoginWithKubernetesAuth(ctx context.Context, vaultAddr, role string) (*vaul
 
 	secret, err := client.Logical().Write("auth/kubernetes/login", data)
 	if err != nil {
+		logger.Error(err, "Vault login failed", "address", vaultAddr, "role", role)
 		return nil, fmt.Errorf("vault k8s login failed: %w", err)
 	}
 
