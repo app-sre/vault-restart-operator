@@ -557,7 +557,7 @@ func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *va
 	// Create RestartManager with dry-run enabled for now
 	restartManager := &vault.RestartManager{
 		Client:       r.Client,
-		VaultAddress: "https://vault.vault-stage.svc.cluster.local:8200", // TODO: Make configurable
+		VaultAddress: "https://vault.vault-stage.svc:8200", // TODO: Make configurable
 		VaultRole:    "vault-operations-role",                            // TODO: Make configurable
 		Namespace:    vr.Namespace,
 		Logger:       logger,

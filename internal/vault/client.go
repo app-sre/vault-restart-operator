@@ -88,10 +88,10 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 	config.Address = vaultAddr
 	config.Timeout = 30 * time.Second
 
-	// Configure TLS if needed
+	// Skip TLS verification for testing
+	logger.Info("Skipping TLS verification for testing")
 	config.ConfigureTLS(&vaultapi.TLSConfig{
-		// Set based on environment
-		Insecure: false,
+		Insecure: true,
 	})
 
 	client, err := vaultapi.NewClient(config)

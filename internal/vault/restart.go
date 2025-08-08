@@ -159,18 +159,27 @@ func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHeal
 		return nil, fmt.Errorf("empty response from raft autopilot state")
 	}
 
-	// Parse response data
-	healthy, ok := resp.Data["Healthy"].(bool)
+	// Log the full autopilot response for debugging
+	rm.Logger.Info("Raft autopilot state response", "data", resp.Data)
+
+	// Parse response data - note the field names are lowercase in the response
+	healthy, ok := resp.Data["healthy"].(bool)
 	if !ok {
 		healthy = false
 	}
+	rm.Logger.Info("Parsed autopilot health status", "healthy", healthy)
 
+	// Count voters from the "voters" array or "servers" map
 	voterCount := 0
-	if servers, exists := resp.Data["Servers"]; exists {
+	if voters, exists := resp.Data["voters"]; exists {
+		if voterList, ok := voters.([]interface{}); ok {
+			voterCount = len(voterList)
+		}
+	} else if servers, exists := resp.Data["servers"]; exists {
 		if serverMap, ok := servers.(map[string]interface{}); ok {
 			for _, server := range serverMap {
 				if serverData, ok := server.(map[string]interface{}); ok {
-					if voter, exists := serverData["Voter"]; exists && voter.(bool) {
+					if nodeType, exists := serverData["node_type"]; exists && nodeType == "voter" {
 						voterCount++
 					}
 				}
@@ -178,12 +187,26 @@ func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHeal
 		}
 	}
 
+	// Get leader info and last contact time
 	lastContact := time.Duration(0)
-	if leader, exists := resp.Data["Leader"]; exists {
-		if leaderData, ok := leader.(map[string]interface{}); ok {
-			if lastContactStr, exists := leaderData["LastContact"]; exists {
-				if lastContactFloat, ok := lastContactStr.(float64); ok {
-					lastContact = time.Duration(lastContactFloat * float64(time.Second))
+	var leaderName string
+	if leader, exists := resp.Data["leader"]; exists {
+		if leaderStr, ok := leader.(string); ok {
+			leaderName = leaderStr
+			// Get leader's last contact from servers map
+			if servers, exists := resp.Data["servers"]; exists {
+				if serverMap, ok := servers.(map[string]interface{}); ok {
+					if leaderData, exists := serverMap[leaderName]; exists {
+						if leaderInfo, ok := leaderData.(map[string]interface{}); ok {
+							if lastContactStr, exists := leaderInfo["last_contact"]; exists {
+								if contactStr, ok := lastContactStr.(string); ok {
+									if duration, err := time.ParseDuration(contactStr); err == nil {
+										lastContact = duration
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -196,7 +219,14 @@ func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHeal
 		Details:     fmt.Sprintf("Vault raft autopilot state: healthy=%v, voters=%d, lastContact=%v", healthy, voterCount, lastContact),
 	}
 
+	rm.Logger.Info("Cluster health analysis", 
+		"healthy", healthy, 
+		"voterCount", voterCount, 
+		"lastContact", lastContact, 
+		"details", health.Details)
+
 	if !healthy {
+		rm.Logger.Error(nil, "Cluster reported as unhealthy by autopilot", "health", health)
 		return health, fmt.Errorf("cluster is not healthy according to raft autopilot")
 	}
 
