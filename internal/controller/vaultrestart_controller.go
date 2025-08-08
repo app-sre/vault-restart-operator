@@ -105,7 +105,7 @@ func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Wait for manager to be ready before initializing
 		<-mgr.Elected()
 		if err := r.initializeBaselines(context.Background()); err != nil {
-			logf.Log.Error(err, "Failed to initialize baselines during startup")
+			logf.Log.Info("Some baselines could not be initialized during startup", "error", err)
 		}
 	}()
 
@@ -182,7 +182,7 @@ func (r *VaultRestartReconciler) handleSecretChange(ctx context.Context, obj cli
 		logger.Info("Creating baseline for newly labeled secret", "secret", secret.GetName(), "namespace", secret.GetNamespace())
 
 		if err := r.createBaseline(ctx, secretObj); err != nil {
-			logger.Error(err, "Failed to create baseline for new secret", "secret", secret.GetName())
+			logger.Info("Could not create baseline for newly discovered secret", "secret", secret.GetName(), "error", err)
 		}
 		return nil // Don't trigger restart on first discovery
 	}
@@ -561,7 +561,7 @@ func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *va
 		VaultRole:    "vault-operations-role",                            // TODO: Make configurable
 		Namespace:    vr.Namespace,
 		Logger:       logger,
-		DryRun:       true, // Enable dry-run mode for testing
+		DryRun:       false, // Production mode - WILL PERFORM ACTUAL RESTARTS
 	}
 
 	// Execute the restart sequence
@@ -590,7 +590,7 @@ func (r *VaultRestartReconciler) initializeBaselines(ctx context.Context) error 
 
 		// Create baseline CR for this secret
 		if err := r.createBaseline(ctx, &secret); err != nil {
-			logger.Error(err, "Failed to create baseline", "secret", secret.Name, "namespace", secret.Namespace)
+			logger.Info("Could not create baseline during initialization", "secret", secret.Name, "namespace", secret.Namespace, "error", err)
 			continue
 		}
 
