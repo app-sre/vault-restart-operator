@@ -38,6 +38,21 @@ type VaultRestartSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=baseline;cert-rotation;config-change;maintenance;manual
 	Reason string `json:"reason"`
+
+	// VaultAddress specifies the Vault server URL
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern="^https?://.*"
+	VaultAddress string `json:"vaultAddress"`
+
+	// VaultRole specifies the Vault Kubernetes auth role name
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	VaultRole string `json:"vaultRole"`
+
+	// DryRun enables dry-run mode where no actual pod restarts are performed
+	// +kubebuilder:default=false
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // VaultRestartStatus defines the observed state of VaultRestart.

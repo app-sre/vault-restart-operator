@@ -38,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
@@ -100,14 +99,7 @@ func (r *VaultRestartReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // SetupWithManager is a method used within a controller to
 // register the controller with a controller-runtime Manager
 func (r *VaultRestartReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Initialize baselines for existing labeled secrets on startup
-	go func() {
-		// Wait for manager to be ready before initializing
-		<-mgr.Elected()
-		if err := r.initializeBaselines(context.Background()); err != nil {
-			logf.Log.Info("Some baselines could not be initialized during startup", "error", err)
-		}
-	}()
+	// No automatic baseline initialization - users must create VaultRestart CRs with proper configuration
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&vaultv1.VaultRestart{}).
@@ -176,19 +168,25 @@ func (r *VaultRestartReconciler) handleSecretChange(ctx context.Context, obj cli
 
 	currentHash := r.calculateSecretHash(secretObj)
 
-	// If this is a newly labeled secret with no existing VaultRestart CRs, create a baseline
+	// Skip auto-restart creation for newly labeled secrets without existing baselines
+	// Users must create an initial VaultRestart CR with proper configuration
 	if !r.hasBaselineForSecret(ctx, secret.GetName(), secret.GetNamespace()) {
 		logger := log.FromContext(ctx)
-		logger.Info("Creating baseline for newly labeled secret", "secret", secret.GetName(), "namespace", secret.GetNamespace())
-
-		if err := r.createBaseline(ctx, secretObj); err != nil {
-			logger.Info("Could not create baseline for newly discovered secret", "secret", secret.GetName(), "error", err)
-		}
-		return nil // Don't trigger restart on first discovery
+		logger.Info("Newly labeled secret discovered, but no VaultRestart baseline exists. Create a VaultRestart CR with proper Vault configuration to enable auto-restarts",
+			"secret", secret.GetName(), "namespace", secret.GetNamespace())
+		return nil // Don't create anything automatically
 	}
 
 	// Check for existing restart with same hash
 	if r.hasExistingRestartForHash(ctx, secret.GetNamespace(), secret.GetName(), currentHash) {
+		return nil
+	}
+
+	// Get Vault configuration from an existing VaultRestart CR for this secret
+	vaultConfig, err := r.getVaultConfigForSecret(ctx, secret.GetName(), secret.GetNamespace())
+	if err != nil {
+		logger := log.FromContext(ctx)
+		logger.Info("Could not get Vault configuration for auto-restart", "secret", secret.GetName(), "error", err)
 		return nil
 	}
 
@@ -206,6 +204,9 @@ func (r *VaultRestartReconciler) handleSecretChange(ctx context.Context, obj cli
 			StatefulSetName: statefulSetName,
 			SecretName:      secret.GetName(),
 			Reason:          "cert-rotation",
+			VaultAddress:    vaultConfig.VaultAddress,
+			VaultRole:       vaultConfig.VaultRole,
+			DryRun:          vaultConfig.DryRun,
 		},
 	}
 
@@ -347,25 +348,32 @@ func (r *VaultRestartReconciler) handleCertPropagationWait(ctx context.Context, 
 // Handle cluster validation
 func (r *VaultRestartReconciler) handleClusterValidation(ctx context.Context, vr *vaultv1.VaultRestart) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	namespacedName := types.NamespacedName{Name: vr.Name, Namespace: vr.Namespace}
 
 	// Validate Vault cluster health
 	if err := r.validateVaultClusterHealth(ctx, vr); err != nil {
-		vr.Status.Phase = "Failed"
-		vr.Status.Message = fmt.Sprintf("Cluster health validation failed: %v", err)
-		vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, vr)
+		// Update status to Failed using safe update
+		updateErr := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
+			vr.Status.Phase = "Failed"
+			vr.Status.Message = fmt.Sprintf("Cluster health validation failed: %v", err)
+			vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+			vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
+		})
+
+		if updateErr != nil {
+			logger.Error(updateErr, "Failed to update status to Failed")
+		}
 
 		logger.Error(err, "Cluster health validation failed", "name", vr.Name)
 		return ctrl.Result{}, nil
 	}
 
-	// Move to execution phase
-	vr.Status.Phase = "InProgress"
-	vr.Status.Message = "Cluster validation passed, starting controlled restart sequence"
-	vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-
-	if err := r.Status().Update(ctx, vr); err != nil {
+	// Move to execution phase using safe update
+	if err := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
+		vr.Status.Phase = "InProgress"
+		vr.Status.Message = "Cluster validation passed, starting controlled restart sequence"
+		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
+	}); err != nil {
 		logger.Error(err, "Failed to update VaultRestart status")
 		return ctrl.Result{}, err
 	}
@@ -377,26 +385,33 @@ func (r *VaultRestartReconciler) handleClusterValidation(ctx context.Context, vr
 // Handle restart execution
 func (r *VaultRestartReconciler) handleRestartExecution(ctx context.Context, vr *vaultv1.VaultRestart) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	namespacedName := types.NamespacedName{Name: vr.Name, Namespace: vr.Namespace}
 
 	// Execute the controlled restart sequence
 	if err := r.executeVaultRestart(ctx, vr); err != nil {
-		vr.Status.Phase = "Failed"
-		vr.Status.Message = fmt.Sprintf("Restart execution failed: %v", err)
-		vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, vr)
+		// Update status to Failed using safe update
+		updateErr := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
+			vr.Status.Phase = "Failed"
+			vr.Status.Message = fmt.Sprintf("Restart execution failed: %v", err)
+			vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+			vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
+		})
+
+		if updateErr != nil {
+			logger.Error(updateErr, "Failed to update status to Failed")
+		}
 
 		logger.Error(err, "Restart execution failed", "name", vr.Name)
 		return ctrl.Result{}, err
 	}
 
-	// Mark as completed
-	vr.Status.Phase = "Completed"
-	vr.Status.Message = "Vault cluster restart completed successfully"
-	vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-
-	if err := r.Status().Update(ctx, vr); err != nil {
+	// Mark as completed using safe update
+	if err := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
+		vr.Status.Phase = "Completed"
+		vr.Status.Message = "Vault cluster restart completed successfully"
+		vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
+	}); err != nil {
 		logger.Error(err, "Failed to update VaultRestart status")
 		return ctrl.Result{}, err
 	}
@@ -554,54 +569,31 @@ func (r *VaultRestartReconciler) validateVaultClusterHealth(ctx context.Context,
 func (r *VaultRestartReconciler) executeVaultRestart(ctx context.Context, vr *vaultv1.VaultRestart) error {
 	logger := log.FromContext(ctx)
 
-	// Create RestartManager with dry-run enabled for now
+	// Get configuration from VaultRestart CR spec
+	vaultAddress := vr.Spec.VaultAddress
+	vaultRole := vr.Spec.VaultRole
+	dryRun := vr.Spec.DryRun
+
+	logger.Info("Configuring Vault restart manager",
+		"vaultAddress", vaultAddress,
+		"vaultRole", vaultRole,
+		"dryRun", dryRun)
+
+	// Create RestartManager with configuration from CR
 	restartManager := &vault.RestartManager{
 		Client:       r.Client,
-		VaultAddress: "https://vault.vault-stage.svc:8200", // TODO: Make configurable
-		VaultRole:    "vault-operations-role",                            // TODO: Make configurable
+		VaultAddress: vaultAddress,
+		VaultRole:    vaultRole,
 		Namespace:    vr.Namespace,
 		Logger:       logger,
-		DryRun:       false, // Production mode - WILL PERFORM ACTUAL RESTARTS
+		DryRun:       dryRun,
 	}
 
 	// Execute the restart sequence
 	return restartManager.ExecuteRestart(ctx, vr.Spec.StatefulSetName)
 }
 
-// initializeBaselines scans for existing labeled secrets and creates baseline CRs
-func (r *VaultRestartReconciler) initializeBaselines(ctx context.Context) error {
-	logger := logf.Log.WithName("baseline-init")
-
-	// Find all secrets with vault.operator/watch=true label
-	secretList := &corev1.SecretList{}
-	err := r.List(ctx, secretList, client.MatchingLabels{"vault.operator/watch": "true"})
-	if err != nil {
-		return fmt.Errorf("failed to list watched secrets: %w", err)
-	}
-
-	logger.Info("Scanning for secrets requiring baseline initialization", "secretCount", len(secretList.Items))
-
-	for _, secret := range secretList.Items {
-		// Check if baseline already exists for this secret
-		if r.hasBaselineForSecret(ctx, secret.Name, secret.Namespace) {
-			logger.V(1).Info("Baseline already exists, skipping", "secret", secret.Name, "namespace", secret.Namespace)
-			continue
-		}
-
-		// Create baseline CR for this secret
-		if err := r.createBaseline(ctx, &secret); err != nil {
-			logger.Info("Could not create baseline during initialization", "secret", secret.Name, "namespace", secret.Namespace, "error", err)
-			continue
-		}
-
-		logger.Info("Created baseline for existing secret", "secret", secret.Name, "namespace", secret.Namespace)
-	}
-
-	logger.Info("Baseline initialization complete")
-	return nil
-}
-
-// hasBaselineForSecret checks if a baseline VaultRestart CR exists for the given secret
+// hasBaselineForSecret checks if any VaultRestart CR exists for the given secret
 func (r *VaultRestartReconciler) hasBaselineForSecret(ctx context.Context, secretName, namespace string) bool {
 	vaultRestarts := &vaultv1.VaultRestartList{}
 	err := r.List(ctx, vaultRestarts, &client.ListOptions{
@@ -621,52 +613,70 @@ func (r *VaultRestartReconciler) hasBaselineForSecret(ctx context.Context, secre
 	return false
 }
 
-// createBaseline creates a baseline VaultRestart CR for a secret in "Completed" state
-func (r *VaultRestartReconciler) createBaseline(ctx context.Context, secret *corev1.Secret) error {
-	// Find the StatefulSet that uses this secret
-	statefulSetName, err := r.findStatefulSetUsingSecret(ctx, secret.Name, secret.Namespace)
+// VaultConfig holds Vault connection configuration
+type VaultConfig struct {
+	VaultAddress string
+	VaultRole    string
+	DryRun       bool
+}
+
+// getVaultConfigForSecret retrieves Vault configuration from an existing VaultRestart CR for the given secret
+func (r *VaultRestartReconciler) getVaultConfigForSecret(ctx context.Context, secretName, namespace string) (*VaultConfig, error) {
+	vaultRestarts := &vaultv1.VaultRestartList{}
+	err := r.List(ctx, vaultRestarts, &client.ListOptions{
+		Namespace: namespace,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to find StatefulSet for secret %s: %w", secret.Name, err)
+		return nil, fmt.Errorf("failed to list VaultRestart CRs: %w", err)
 	}
 
-	// Calculate current hash of the secret
-	currentHash := r.calculateSecretHash(secret)
-
-	// Create baseline VaultRestart CR
-	baseline := &vaultv1.VaultRestart{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("baseline-%s", secret.Name),
-			Namespace: secret.Namespace,
-			Labels: map[string]string{
-				"vault.operator/trigger": "baseline",
-				"vault.operator/secret":  secret.Name,
-			},
-		},
-		Spec: vaultv1.VaultRestartSpec{
-			StatefulSetName: statefulSetName,
-			SecretName:      secret.Name,
-			Reason:          "baseline",
-		},
+	// Find the most recent VaultRestart CR for this secret
+	var latestVR *vaultv1.VaultRestart
+	for _, vr := range vaultRestarts.Items {
+		if vr.Spec.SecretName == secretName {
+			if latestVR == nil || vr.CreationTimestamp.After(latestVR.CreationTimestamp.Time) {
+				vrCopy := vr
+				latestVR = &vrCopy
+			}
+		}
 	}
 
-	// Create the CR first (without status)
-	if err := r.Create(ctx, baseline); err != nil {
-		return fmt.Errorf("failed to create baseline CR: %w", err)
+	if latestVR == nil {
+		return nil, fmt.Errorf("no VaultRestart CR found for secret %s", secretName)
 	}
 
-	// Update status separately to mark as completed
-	baseline.Status = vaultv1.VaultRestartStatus{
-		Phase:              "Completed",
-		SecretHash:         currentHash,
-		Message:            "Baseline established during operator initialization",
-		LastUpdated:        &metav1.Time{Time: time.Now()},
-		ObservedGeneration: baseline.Generation,
-		CompletionTime:     &metav1.Time{Time: time.Now()},
+	return &VaultConfig{
+		VaultAddress: latestVR.Spec.VaultAddress,
+		VaultRole:    latestVR.Spec.VaultRole,
+		DryRun:       latestVR.Spec.DryRun,
+	}, nil
+}
+
+// updateVaultRestartStatus safely updates the VaultRestart status with retry logic
+func (r *VaultRestartReconciler) updateVaultRestartStatus(ctx context.Context, namespacedName types.NamespacedName, updateFunc func(*vaultv1.VaultRestart)) error {
+	// Retry up to 3 times with exponential backoff
+	for i := 0; i < 3; i++ {
+		// Fetch the latest version of the VaultRestart
+		vr := &vaultv1.VaultRestart{}
+		if err := r.Get(ctx, namespacedName, vr); err != nil {
+			return err
+		}
+
+		// Apply the update function
+		updateFunc(vr)
+
+		// Attempt to update the status
+		if err := r.Status().Update(ctx, vr); err != nil {
+			if i < 2 { // Only retry if we haven't reached the max attempts
+				time.Sleep(time.Duration(i+1) * 100 * time.Millisecond) // Exponential backoff
+				continue
+			}
+			return err
+		}
+
+		// Success
+		return nil
 	}
 
-	if err := r.Status().Update(ctx, baseline); err != nil {
-		return fmt.Errorf("failed to update baseline status: %w", err)
-	}
-
-	return nil
+	return fmt.Errorf("failed to update status after retries")
 }

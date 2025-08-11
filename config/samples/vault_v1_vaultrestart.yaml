@@ -9,4 +9,7 @@ metadata:
 spec:
   secretName: vault-tls-ca-key-pair
   statefulSetName: vault
+  vaultAddress: "https://vault.vault-stage.svc:8200"
+  vaultRole: "vault-operations-role"
+  dryRun: true
   reason: manual

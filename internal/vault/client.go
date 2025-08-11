@@ -42,7 +42,7 @@ func LoginWithKubernetesAuthAndServiceAccount(ctx context.Context, k8sClient cli
 
 	// Get the service account token from Kubernetes
 	logger.Info("Getting service account token", "serviceAccount", serviceAccountName, "namespace", namespace)
-	
+
 	sa := &corev1.ServiceAccount{}
 	err := k8sClient.Get(ctx, types.NamespacedName{Name: serviceAccountName, Namespace: namespace}, sa)
 	if err != nil {
@@ -51,7 +51,7 @@ func LoginWithKubernetesAuthAndServiceAccount(ctx context.Context, k8sClient cli
 
 	// Use TokenRequest API to create a short-lived token for the service account
 	logger.Info("Requesting token for service account using TokenRequest API")
-	
+
 	// Create a TokenRequest for 1 hour expiration
 	expirationSeconds := int64(3600) // 1 hour
 	tokenRequest := &authv1.TokenRequest{
@@ -70,8 +70,8 @@ func LoginWithKubernetesAuthAndServiceAccount(ctx context.Context, k8sClient cli
 		return nil, fmt.Errorf("empty token returned for service account %s/%s", namespace, serviceAccountName)
 	}
 
-	logger.Info("Successfully created token for service account", 
-		"serviceAccount", serviceAccountName, 
+	logger.Info("Successfully created token for service account",
+		"serviceAccount", serviceAccountName,
 		"namespace", namespace,
 		"tokenLength", len(tokenRequest.Status.Token),
 		"expiresAt", tokenRequest.Status.ExpirationTimestamp.Time)
@@ -100,7 +100,7 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 	}
 
 	var jwt []byte
-	
+
 	if jwtToken == "" {
 		logger.Info("Reading default service account token")
 		// Get the JWT token from the default Kubernetes service account

@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/jmosco/vault-restart-operator
-  newTag: v0.0.18-dryrun
+  newTag: v0.0.21

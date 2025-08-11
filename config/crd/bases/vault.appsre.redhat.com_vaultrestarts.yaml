@@ -57,6 +57,11 @@ spec:
           spec:
             description: VaultRestartSpec defines the desired state of VaultRestart.
             properties:
+              dryRun:
+                default: false
+                description: DryRun enables dry-run mode where no actual pod restarts
+                  are performed
+                type: boolean
               reason:
                 description: Reason specifies why the restart is being performed
                 enum:
@@ -76,10 +81,21 @@ spec:
                   to restart
                 minLength: 1
                 type: string
+              vaultAddress:
+                description: VaultAddress specifies the Vault server URL
+                minLength: 1
+                pattern: ^https?://.*
+                type: string
+              vaultRole:
+                description: VaultRole specifies the Vault Kubernetes auth role name
+                minLength: 1
+                type: string
             required:
             - reason
             - secretName
             - statefulSetName
+            - vaultAddress
+            - vaultRole
             type: object
           status:
             description: VaultRestartStatus defines the observed state of VaultRestart.

@@ -127,7 +127,7 @@ func (rm *RestartManager) authenticateVault(ctx context.Context) error {
 	// Use vault-operations-sa service account for Vault authentication
 	vaultServiceAccount := "vault-operations-sa"
 	vaultNamespace := "vault-stage" // TODO: Make this configurable
-	
+
 	client, err := LoginWithKubernetesAuthAndServiceAccount(ctx, rm.Client, rm.VaultAddress, rm.VaultRole, vaultServiceAccount, vaultNamespace)
 	if err != nil {
 		return err
@@ -219,10 +219,10 @@ func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHeal
 		Details:     fmt.Sprintf("Vault raft autopilot state: healthy=%v, voters=%d, lastContact=%v", healthy, voterCount, lastContact),
 	}
 
-	rm.Logger.Info("Cluster health analysis", 
-		"healthy", healthy, 
-		"voterCount", voterCount, 
-		"lastContact", lastContact, 
+	rm.Logger.Info("Cluster health analysis",
+		"healthy", healthy,
+		"voterCount", voterCount,
+		"lastContact", lastContact,
 		"details", health.Details)
 
 	if !healthy {
