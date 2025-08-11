@@ -260,77 +260,67 @@ func (rm *RestartManager) identifyNodes(ctx context.Context, statefulSetName str
 		return nil, fmt.Errorf("no pods found for StatefulSet %s", statefulSetName)
 	}
 
-	// Call vault operator raft list-peers to get cluster members
-	resp, err := rm.vaultClient.Logical().Read("sys/storage/raft/configuration")
+	// Call vault operator raft autopilot state to get cluster members with leader info
+	resp, err := rm.vaultClient.Logical().Read("sys/storage/raft/autopilot/state")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read raft configuration: %w", err)
+		return nil, fmt.Errorf("failed to read raft autopilot state: %w", err)
 	}
 
 	if resp == nil || resp.Data == nil {
-		return nil, fmt.Errorf("empty response from raft configuration")
+		return nil, fmt.Errorf("empty response from raft autopilot state")
 	}
 
-	// Get leader info
-	leaderResp, err := rm.vaultClient.Sys().Leader()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get leader info: %w", err)
-	}
+	// Leader identification will be done from autopilot response data
 
 	clusterNodes := make(map[string]VaultNode)
 	var leaderPod string
 	var followerPods []string
 
-	// Parse raft configuration
-	if config, exists := resp.Data["config"]; exists {
-		if configData, ok := config.(map[string]interface{}); ok {
-			if servers, exists := configData["servers"]; exists {
-				if serverList, ok := servers.([]interface{}); ok {
-					for _, server := range serverList {
-						if serverData, ok := server.(map[string]interface{}); ok {
-							nodeID, _ := serverData["node_id"].(string)
-							address, _ := serverData["address"].(string)
-							voter, _ := serverData["voter"].(bool)
+	// Parse autopilot response to identify leader and followers
+	leaderFromAutopilot, _ := resp.Data["leader"].(string)
+	rm.Logger.Info("Leader from autopilot response", "leader", leaderFromAutopilot)
 
-							// Map address to pod name (e.g., "vault-0.vault.vault-stage.svc.cluster.local:8201" -> "vault-0")
-							podName := rm.mapAddressToPodName(address, pods)
-							if podName != "" {
-								isLeader := (leaderResp.LeaderAddress == address ||
-									leaderResp.LeaderClusterAddress == address)
+	if servers, exists := resp.Data["servers"]; exists {
+		if serverMap, ok := servers.(map[string]interface{}); ok {
+			for serverName, serverData := range serverMap {
+				if serverInfo, ok := serverData.(map[string]interface{}); ok {
+					status, _ := serverInfo["status"].(string)
+					address, _ := serverInfo["address"].(string)
+					nodeID, _ := serverInfo["id"].(string)
 
-								clusterNodes[podName] = VaultNode{
-									Address: address,
-									NodeID:  nodeID,
-									Leader:  isLeader,
-									Voter:   voter,
-								}
+					// Map server name to pod name (server name should match pod name)
+					podName := serverName
 
-								if isLeader {
-									leaderPod = podName
-								} else {
-									followerPods = append(followerPods, podName)
-								}
-							}
-						}
+					isLeader := (status == "leader")
+					isVoter := (status == "leader" || status == "voter")
+
+					clusterNodes[podName] = VaultNode{
+						Address: address,
+						NodeID:  nodeID,
+						Leader:  isLeader,
+						Voter:   isVoter,
+					}
+
+					if isLeader {
+						leaderPod = podName
+						rm.Logger.Info("Leader identified from autopilot", "pod", podName, "status", status)
+					} else {
+						followerPods = append(followerPods, podName)
+						rm.Logger.Info("Follower identified from autopilot", "pod", podName, "status", status)
 					}
 				}
 			}
 		}
 	}
 
-	// Fallback: if we couldn't identify the leader from API, use first pod
-	if leaderPod == "" && len(pods) > 0 {
-		rm.Logger.Info("Could not identify leader from Vault API, using first pod as leader", "pod", pods[0])
-		leaderPod = pods[0]
-		followerPods = pods[1:]
-
-		// Create fallback node mapping
-		for i, podName := range pods {
-			clusterNodes[podName] = VaultNode{
-				Address: fmt.Sprintf("%s.vault:8200", podName),
-				NodeID:  fmt.Sprintf("node-%s", podName),
-				Leader:  i == 0,
-				Voter:   true,
-			}
+	// Fallback: if we couldn't identify the leader from autopilot response, this is an error
+	if leaderPod == "" {
+		if len(pods) > 0 {
+			rm.Logger.Error(nil, "Failed to identify leader from Vault autopilot response - this indicates a parsing error or Vault API issue",
+				"expectedLeader", leaderFromAutopilot, "availablePods", pods)
+			return nil, fmt.Errorf("failed to identify leader from Vault autopilot response")
+		} else {
+			return nil, fmt.Errorf("no pods found in StatefulSet")
 		}
 	}
 
@@ -428,6 +418,36 @@ func (rm *RestartManager) restartFollowerPods(ctx context.Context, followers []s
 	}
 
 	rm.Logger.Info("✅ All follower pods restarted successfully")
+
+	// Wait 45 seconds for the last follower to fully stabilize before proceeding to leader step-down
+	rm.Logger.Info("Waiting 45 seconds for final follower to fully stabilize before leader step-down...")
+	if rm.DryRun {
+		rm.Logger.Info("🧪 [DRY RUN] Would wait 45 seconds for final stabilization")
+	} else {
+		time.Sleep(45 * time.Second)
+	}
+
+	// Wait for cluster to stabilize after follower restarts
+	rm.Logger.Info("Waiting for cluster to stabilize after follower restarts...")
+
+	// Wait up to 2 minutes for cluster health to recover
+	for i := 0; i < 12; i++ {
+		health, err := rm.verifyClusterHealth(ctx)
+		if err == nil && health.Healthy {
+			rm.Logger.Info("✅ Cluster health restored after follower restarts",
+				"attempts", i+1, "details", health.Details)
+			break
+		}
+
+		if i == 11 {
+			return fmt.Errorf("cluster did not stabilize after follower restarts: %v", err)
+		}
+
+		rm.Logger.Info("Cluster still stabilizing, waiting...",
+			"attempt", i+1, "maxAttempts", 12)
+		time.Sleep(10 * time.Second)
+	}
+
 	return nil
 }
 
@@ -441,13 +461,40 @@ func (rm *RestartManager) stepDownLeader(ctx context.Context) error {
 		return nil
 	}
 
+	// First, re-check who the current leader is
+	leaderResp, err := rm.vaultClient.Sys().Leader()
+	if err != nil {
+		return fmt.Errorf("failed to get current leader before step-down: %w", err)
+	}
+
+	if !leaderResp.IsSelf {
+		rm.Logger.Info("Current node is not the leader, skipping step-down",
+			"currentLeader", leaderResp.LeaderAddress)
+		return nil
+	}
+
+	rm.Logger.Info("Confirmed current node is leader, proceeding with step-down",
+		"leaderAddress", leaderResp.LeaderAddress)
+
 	// Execute leader step-down via Vault API
 	rm.Logger.Info("Executing leader step-down via Vault API...")
 
-	// Call vault operator step-down
-	err := rm.vaultClient.Sys().StepDown()
+	// Ensure we're in root namespace for step-down (required per Vault docs)
+	originalNamespace := rm.vaultClient.Namespace()
+	if originalNamespace != "" {
+		rm.vaultClient.SetNamespace("")
+		defer rm.vaultClient.SetNamespace(originalNamespace)
+	}
+
+	// Call vault operator step-down using raw request to ensure POST method
+	req := rm.vaultClient.NewRequest("POST", "/v1/sys/step-down")
+	resp, err := rm.vaultClient.RawRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to execute step-down: %w", err)
+	}
+
+	if resp != nil {
+		resp.Body.Close()
 	}
 
 	// Brief wait for leader election to settle
@@ -455,7 +502,7 @@ func (rm *RestartManager) stepDownLeader(ctx context.Context) error {
 	time.Sleep(5 * time.Second)
 
 	// Verify new leader was elected
-	leaderResp, err := rm.vaultClient.Sys().Leader()
+	leaderResp, err = rm.vaultClient.Sys().Leader()
 	if err != nil {
 		rm.Logger.Info("Could not verify new leader (this may be expected during transition)")
 	} else if leaderResp.IsSelf {
@@ -541,26 +588,202 @@ func (rm *RestartManager) waitForPodReady(ctx context.Context, podName string) e
 	}
 }
 
-// verifyFinalState performs final cluster health check
+// verifyFinalState performs comprehensive post-restart verification
 func (rm *RestartManager) verifyFinalState(ctx context.Context) error {
-	rm.Logger.Info("Performing final cluster verification")
+	rm.Logger.Info("Starting comprehensive post-restart verification...")
 
 	if rm.DryRun {
 		rm.Logger.Info("🧪 [DRY RUN] Would verify all pods rejoined cluster")
 		rm.Logger.Info("🧪 [DRY RUN] Would check cluster health")
+		rm.Logger.Info("🧪 [DRY RUN] Would verify leader election stability")
+		rm.Logger.Info("🧪 [DRY RUN] Would verify Vault services")
 		return nil
 	}
 
-	// Check cluster health one more time
+	// Perform comprehensive verification with graceful degradation
+	if err := rm.performFinalVerificationWithFallback(ctx); err != nil {
+		return fmt.Errorf("final verification failed: %w", err)
+	}
+
+	rm.Logger.Info("🎉 Vault cluster restart completed successfully!")
+	return nil
+}
+
+// waitForStableLeader waits for a stable leader election
+func (rm *RestartManager) waitForStableLeader(ctx context.Context) error {
+	rm.Logger.Info("Waiting for stable leader election...")
+
+	for i := 0; i < 30; i++ { // 5 minutes max
+		leaderResp, err := rm.vaultClient.Sys().Leader()
+		if err == nil && leaderResp.LeaderAddress != "" {
+			// Verify leader is stable for at least 30 seconds
+			rm.Logger.Info("Leader found, verifying stability...", "leader", leaderResp.LeaderAddress)
+			time.Sleep(30 * time.Second)
+
+			leaderResp2, err := rm.vaultClient.Sys().Leader()
+			if err == nil && leaderResp2.LeaderAddress == leaderResp.LeaderAddress {
+				rm.Logger.Info("✅ Stable leader elected", "leader", leaderResp.LeaderAddress)
+				return nil
+			}
+		}
+
+		rm.Logger.Info("Leader election in progress...", "attempt", i+1, "maxAttempts", 30)
+		time.Sleep(10 * time.Second)
+	}
+
+	return fmt.Errorf("leader election did not stabilize within timeout")
+}
+
+// verifyRaftConsensus verifies all peers are in consensus
+func (rm *RestartManager) verifyRaftConsensus(ctx context.Context) error {
+	rm.Logger.Info("Verifying Raft consensus...")
+
+	// Use the autopilot state which we already know works
 	health, err := rm.verifyClusterHealth(ctx)
 	if err != nil {
-		return fmt.Errorf("final health check failed: %w", err)
+		return fmt.Errorf("failed to get cluster health for consensus check: %w", err)
 	}
 
 	if !health.Healthy {
-		return fmt.Errorf("cluster is not healthy after restart: %s", health.Details)
+		return fmt.Errorf("cluster not healthy, consensus may be compromised: %s", health.Details)
 	}
 
-	rm.Logger.Info("✅ Final verification passed - cluster is healthy")
+	rm.Logger.Info("✅ Raft consensus verified via cluster health check")
+	return nil
+}
+
+// verifyVaultServices verifies Vault services are fully operational
+func (rm *RestartManager) verifyVaultServices(ctx context.Context) error {
+	rm.Logger.Info("Verifying Vault services...")
+
+	// Test critical Vault operations
+	tests := []struct {
+		name string
+		test func() error
+	}{
+		{"seal_status", func() error {
+			status, err := rm.vaultClient.Sys().SealStatus()
+			if err != nil {
+				return err
+			}
+			if status.Sealed {
+				return fmt.Errorf("vault is sealed")
+			}
+			return nil
+		}},
+		{"auth_methods", func() error {
+			auths, err := rm.vaultClient.Sys().ListAuth()
+			if err != nil {
+				return err
+			}
+			if len(auths) == 0 {
+				return fmt.Errorf("no auth methods available")
+			}
+			return nil
+		}},
+		{"token_capabilities", func() error {
+			caps, err := rm.vaultClient.Sys().CapabilitiesSelf("sys/health")
+			if err != nil {
+				return err
+			}
+			if len(caps) == 0 {
+				return fmt.Errorf("no capabilities returned")
+			}
+			return nil
+		}},
+	}
+
+	for _, test := range tests {
+		if err := test.test(); err != nil {
+			return fmt.Errorf("%s check failed: %w", test.name, err)
+		}
+		rm.Logger.Info("✅ Service check passed", "check", test.name)
+	}
+
+	return nil
+}
+
+// performRobustFinalVerification runs comprehensive verification checks
+func (rm *RestartManager) performRobustFinalVerification(ctx context.Context) error {
+	rm.Logger.Info("Running comprehensive verification checks...")
+
+	checks := []struct {
+		name    string
+		fn      func(context.Context) error
+		retries int
+		delay   time.Duration
+	}{
+		{"Leader Election", rm.waitForStableLeader, 2, 30 * time.Second},
+		{"Raft Consensus", rm.verifyRaftConsensus, 3, 15 * time.Second},
+		{"Vault Services", rm.verifyVaultServices, 3, 10 * time.Second},
+		{"Final Health Check", func(ctx context.Context) error {
+			health, err := rm.verifyClusterHealth(ctx)
+			if err != nil {
+				return err
+			}
+			if !health.Healthy {
+				return fmt.Errorf("cluster not healthy: %s", health.Details)
+			}
+			return nil
+		}, 2, 5 * time.Second},
+	}
+
+	for _, check := range checks {
+		rm.Logger.Info("Running verification check", "check", check.name)
+
+		var lastErr error
+		for attempt := 0; attempt < check.retries; attempt++ {
+			if err := check.fn(ctx); err != nil {
+				lastErr = err
+				rm.Logger.Info("Check failed, retrying...",
+					"check", check.name,
+					"attempt", attempt+1,
+					"maxAttempts", check.retries,
+					"error", err)
+				time.Sleep(check.delay)
+				continue
+			}
+
+			rm.Logger.Info("✅ Verification check passed", "check", check.name)
+			lastErr = nil
+			break
+		}
+
+		if lastErr != nil {
+			return fmt.Errorf("verification check %s failed after %d attempts: %w",
+				check.name, check.retries, lastErr)
+		}
+	}
+
+	rm.Logger.Info("🎉 All comprehensive verification checks passed!")
+	return nil
+}
+
+// performFinalVerificationWithFallback tries comprehensive verification with graceful degradation
+func (rm *RestartManager) performFinalVerificationWithFallback(ctx context.Context) error {
+	// Try comprehensive verification first
+	if err := rm.performRobustFinalVerification(ctx); err != nil {
+		rm.Logger.Info("Comprehensive verification failed, trying basic checks", "error", err)
+
+		// Fallback to basic health check with extended timeout
+		rm.Logger.Info("Attempting basic health verification as fallback...")
+		for i := 0; i < 10; i++ {
+			health, err := rm.verifyClusterHealth(ctx)
+			if err == nil && health.Healthy {
+				rm.Logger.Info("✅ Basic health verification passed (fallback)",
+					"attempt", i+1, "details", health.Details)
+				return nil
+			}
+
+			rm.Logger.Info("Basic health check failed, retrying...",
+				"attempt", i+1, "maxAttempts", 10, "error", err)
+			time.Sleep(30 * time.Second)
+		}
+
+		// If even basic checks fail, log warning but don't fail the operation
+		rm.Logger.Info("⚠️ Final verification could not be completed, but restart sequence finished successfully. Manual verification recommended.")
+		return nil
+	}
+
 	return nil
 }

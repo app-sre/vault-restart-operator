@@ -64,6 +64,51 @@ The CR status will display the current Vault Cluster's restart condition. The fo
 
 These conditions help track the progress and outcome of each restart operation managed by the operator.
 
+## Safety Features
+
+- **Dry-run mode**: Test operations without actual pod restarts
+- **Health monitoring**: Continuous cluster health verification
+- **Quorum protection**: Refuses to operate without sufficient healthy nodes
+- **Graceful degradation**: Fallback verification if comprehensive checks fail
+- **Proper timing**: 45-second delays follow HashiCorp recommendations
+
+## Example Usage
+
+```yaml
+apiVersion: vault.appsre.redhat.com/v1
+kind: VaultRestart
+metadata:
+  name: vault-cert-rotation
+  namespace: vault-stage
+spec:
+  statefulSetName: vault
+  secretName: vault-tls-ca-key-pair
+  vaultAddress: "https://vault.vault-stage.svc:8200"
+  vaultRole: "vault-operations-role"
+  reason: cert-rotation
+  dryRun: false
+```
+
+## Prerequisites
+
+- Vault cluster with raft storage backend
+- Kubernetes auth method configured in Vault
+- Service account with appropriate Vault policies:
+  ```hcl
+  path "sys/leader" {
+    capabilities = ["read"]
+  }
+  path "sys/step-down" {
+    capabilities = ["sudo"]
+  }
+  path "sys/storage/raft/autopilot/state" {
+    capabilities = ["read"]
+  }
+  path "sys/storage/raft/configuration" {
+    capabilities = ["read"]
+  }
+  ```
+
 ## Development
 
 ## Building the Operator
