@@ -143,7 +143,7 @@ func (rm *RestartManager) authenticateVault(ctx context.Context) error {
 // verifyClusterHealth checks Vault cluster health using raft autopilot
 func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHealth, error) {
 	if rm.DryRun {
-		rm.Logger.Info("🧪 [DRY RUN] Testing cluster health verification using real Vault API calls")
+		rm.Logger.Info("[DRY RUN] Testing cluster health verification using real Vault API calls")
 	}
 
 	// Check raft autopilot state via Vault API
@@ -244,7 +244,7 @@ func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHeal
 // identifyNodes determines leader and follower pods using vault operator members
 func (rm *RestartManager) identifyNodes(ctx context.Context, statefulSetName string) (*NodeInfo, error) {
 	if rm.DryRun {
-		rm.Logger.Info("🧪 [DRY RUN] Testing node identification using real Vault API calls")
+		rm.Logger.Info("[DRY RUN] Testing node identification using real Vault API calls")
 	}
 
 	// Get StatefulSet pods from Kubernetes
@@ -456,8 +456,8 @@ func (rm *RestartManager) stepDownLeader(ctx context.Context) error {
 	rm.Logger.Info("Stepping down Vault leader")
 
 	if rm.DryRun {
-		rm.Logger.Info("🧪 [DRY RUN] Would execute 'vault operator step-down'")
-		rm.Logger.Info("🧪 [DRY RUN] Would wait for new leader election")
+		rm.Logger.Info("[DRY RUN] Would execute 'vault operator step-down'")
+		rm.Logger.Info("[DRY RUN] Would wait for new leader election")
 		return nil
 	}
 
@@ -520,8 +520,8 @@ func (rm *RestartManager) restartFormerLeader(ctx context.Context, leaderPod str
 	rm.Logger.Info("Restarting former leader pod", "pod", leaderPod)
 
 	if rm.DryRun {
-		rm.Logger.Info("🧪 [DRY RUN] Would delete former leader pod", "pod", leaderPod)
-		rm.Logger.Info("🧪 [DRY RUN] Would wait for pod to rejoin cluster")
+		rm.Logger.Info("[DRY RUN] Would delete former leader pod", "pod", leaderPod)
+		rm.Logger.Info("[DRY RUN] Would wait for pod to rejoin cluster")
 		return nil
 	}
 
