@@ -1,5 +1,10 @@
 # vault-restart Operator
 
+[![Lint](https://github.com/app-sre/vault-restart-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/app-sre/vault-restart-operator/actions/workflows/lint.yml)
+[![Tests](https://github.com/app-sre/vault-restart-operator/actions/workflows/test.yml/badge.svg)](https://github.com/app-sre/vault-restart-operator/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/app-sre/vault-restart-operator)](https://goreportcard.com/report/github.com/app-sre/vault-restart-operator)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/app-sre/vault-restart-operator)
+
 The **vault-restart-operator** is a Kubernetes controller designed to
 safely orchestrate rolling restarts of HashiCorp Vault clusters using
 the Raft storage backend. It ensures high availability by coordinating
