@@ -41,6 +41,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
+// Phase constants for VaultRestart status
+const (
+	PhasePending                   = "Pending"
+	PhaseWaitingForCertPropagation = "WaitingForCertPropagation"
+	PhaseValidating                = "Validating"
+	PhaseInProgress                = "InProgress"
+	PhaseCompleted                 = "Completed"
+	PhaseFailed                    = "Failed"
+)
+
 // VaultRestartReconciler reconciles a VaultRestart object
 type VaultRestartReconciler struct {
 	client.Client
@@ -48,12 +58,12 @@ type VaultRestartReconciler struct {
 	Scheme      *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
-//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
-//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
-//+kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vault.appsre.redhat.com,resources=vaultrestarts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=vault.appsre.redhat.com,resources=vaultrestarts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=vault.appsre.redhat.com,resources=vaultrestarts/finalizers,verbs=update
@@ -81,15 +91,15 @@ func (r *VaultRestartReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// State machine based on current phase
 	switch vr.Status.Phase {
-	case "", "Pending":
+	case "", PhasePending:
 		return r.handlePendingPhase(ctx, vr)
-	case "WaitingForCertPropagation":
+	case PhaseWaitingForCertPropagation:
 		return r.handleCertPropagationWait(ctx, vr)
-	case "Validating":
+	case PhaseValidating:
 		return r.handleClusterValidation(ctx, vr)
-	case "InProgress":
+	case PhaseInProgress:
 		return r.handleRestartExecution(ctx, vr)
-	case "Completed", "Failed":
+	case PhaseCompleted, PhaseFailed:
 		return ctrl.Result{}, nil
 	default:
 		return ctrl.Result{}, fmt.Errorf("unknown phase: %s", vr.Status.Phase)
@@ -229,7 +239,7 @@ func (r *VaultRestartReconciler) handleRouteChange(ctx context.Context, obj clie
 		return []ctrl.Request{}
 	}
 
-	// Find VaultRestart CRs in "WaitingForCertPropagation" phase
+	// Find VaultRestart CRs in PhaseWaitingForCertPropagation phase
 	vaultRestarts := &vaultv1.VaultRestartList{}
 	err := r.List(ctx, vaultRestarts, &client.ListOptions{
 		Namespace: route.GetNamespace(),
@@ -240,7 +250,7 @@ func (r *VaultRestartReconciler) handleRouteChange(ctx context.Context, obj clie
 
 	var requests []ctrl.Request
 	for _, vr := range vaultRestarts.Items {
-		if vr.Status.Phase == "WaitingForCertPropagation" {
+		if vr.Status.Phase == PhaseWaitingForCertPropagation {
 			requests = append(requests, ctrl.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vr.Name,
@@ -270,7 +280,7 @@ func (r *VaultRestartReconciler) initializeVaultRestart(ctx context.Context, vr 
 
 	// Calculate and store the hash
 	vr.Status.SecretHash = r.calculateSecretHash(secret)
-	vr.Status.Phase = "Pending"
+	vr.Status.Phase = PhasePending
 	vr.Status.Message = "VaultRestart initialized, preparing for execution"
 	vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
 	vr.Status.ObservedGeneration = vr.Generation
@@ -288,7 +298,7 @@ func (r *VaultRestartReconciler) initializeVaultRestart(ctx context.Context, vr 
 func (r *VaultRestartReconciler) handlePendingPhase(ctx context.Context, vr *vaultv1.VaultRestart) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	vr.Status.Phase = "WaitingForCertPropagation"
+	vr.Status.Phase = PhaseWaitingForCertPropagation
 	vr.Status.Message = "Waiting for cert-utils-operator to propagate certificate changes"
 	vr.Status.StartTime = &metav1.Time{Time: time.Now()}
 	vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
@@ -310,7 +320,9 @@ func (r *VaultRestartReconciler) handleCertPropagationWait(ctx context.Context, 
 	if err := r.validateCertUtilsOperatorComplete(ctx, vr); err != nil {
 		vr.Status.Message = fmt.Sprintf("Waiting for cert-utils-operator: %v", err)
 		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, vr)
+		if updateErr := r.Status().Update(ctx, vr); updateErr != nil {
+			logger.Error(updateErr, "failed to update status")
+		}
 
 		logger.Info("cert-utils-operator validation failed, continuing to wait",
 			"name", vr.Name, "error", err.Error())
@@ -326,13 +338,15 @@ func (r *VaultRestartReconciler) handleCertPropagationWait(ctx context.Context, 
 		vr.Status.Message = fmt.Sprintf("Certificate propagation complete, grace period: %v remaining",
 			remainingTime.Round(time.Second))
 		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, vr)
+		if updateErr := r.Status().Update(ctx, vr); updateErr != nil {
+			logger.Error(updateErr, "failed to update status")
+		}
 
 		return ctrl.Result{RequeueAfter: remainingTime}, nil
 	}
 
 	// All checks passed, proceed to cluster validation
-	vr.Status.Phase = "Validating"
+	vr.Status.Phase = PhaseValidating
 	vr.Status.Message = "Certificate propagation complete, validating Vault cluster health"
 	vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
 
@@ -354,7 +368,7 @@ func (r *VaultRestartReconciler) handleClusterValidation(ctx context.Context, vr
 	if err := r.validateVaultClusterHealth(ctx, vr); err != nil {
 		// Update status to Failed using safe update
 		updateErr := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
-			vr.Status.Phase = "Failed"
+			vr.Status.Phase = PhaseFailed
 			vr.Status.Message = fmt.Sprintf("Cluster health validation failed: %v", err)
 			vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
 			vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
@@ -370,7 +384,7 @@ func (r *VaultRestartReconciler) handleClusterValidation(ctx context.Context, vr
 
 	// Move to execution phase using safe update
 	if err := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
-		vr.Status.Phase = "InProgress"
+		vr.Status.Phase = PhaseInProgress
 		vr.Status.Message = "Cluster validation passed, starting controlled restart sequence"
 		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
 	}); err != nil {
@@ -391,7 +405,7 @@ func (r *VaultRestartReconciler) handleRestartExecution(ctx context.Context, vr 
 	if err := r.executeVaultRestart(ctx, vr); err != nil {
 		// Update status to Failed using safe update
 		updateErr := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
-			vr.Status.Phase = "Failed"
+			vr.Status.Phase = PhaseFailed
 			vr.Status.Message = fmt.Sprintf("Restart execution failed: %v", err)
 			vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
 			vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}
@@ -407,7 +421,7 @@ func (r *VaultRestartReconciler) handleRestartExecution(ctx context.Context, vr 
 
 	// Mark as completed using safe update
 	if err := r.updateVaultRestartStatus(ctx, namespacedName, func(vr *vaultv1.VaultRestart) {
-		vr.Status.Phase = "Completed"
+		vr.Status.Phase = PhaseCompleted
 		vr.Status.Message = "Vault cluster restart completed successfully"
 		vr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
 		vr.Status.LastUpdated = &metav1.Time{Time: time.Now()}

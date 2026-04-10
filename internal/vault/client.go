@@ -90,13 +90,15 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 
 	// Skip TLS verification for testing
 	logger.Info("Skipping TLS verification for testing")
-	config.ConfigureTLS(&vaultapi.TLSConfig{
+	if err := config.ConfigureTLS(&vaultapi.TLSConfig{
 		Insecure: true,
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("failed to configure TLS: %w", err)
+	}
 
-	client, err := vaultapi.NewClient(config)
+	vClient, err := vaultapi.NewClient(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create vault client: %w", err)
+		return nil, fmt.Errorf("failed to create vault vClient: %w", err)
 	}
 
 	var jwt []byte
@@ -119,7 +121,7 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 		"jwt":  string(jwt),
 	}
 
-	secret, err := client.Logical().Write("auth/kubernetes/login", data)
+	secret, err := vClient.Logical().Write("auth/kubernetes/login", data)
 	if err != nil {
 		logger.Error(err, "Vault login failed", "address", vaultAddr, "role", role)
 		return nil, fmt.Errorf("vault k8s login failed: %w", err)
@@ -129,7 +131,7 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 		return nil, fmt.Errorf("no auth info returned after login")
 	}
 
-	client.SetToken(secret.Auth.ClientToken)
+	vClient.SetToken(secret.Auth.ClientToken)
 
 	logger.Info("Successfully authenticated with Vault",
 		"address", vaultAddr,
@@ -137,5 +139,5 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 		"policies", secret.Auth.Policies,
 		"ttl", secret.Auth.LeaseDuration)
 
-	return client, nil
+	return vClient, nil
 }

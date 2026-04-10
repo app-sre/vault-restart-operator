@@ -112,9 +112,7 @@ func (rm *RestartManager) ExecuteRestart(ctx context.Context, statefulSetName st
 	}
 
 	// Step 7: Final verification
-	if err := rm.verifyFinalState(ctx); err != nil {
-		return fmt.Errorf("final verification failed: %w", err)
-	}
+	rm.verifyFinalState(ctx)
 
 	rm.Logger.Info("🎉 Vault cluster restart completed successfully", "dryRun", rm.DryRun)
 	return nil
@@ -128,11 +126,11 @@ func (rm *RestartManager) authenticateVault(ctx context.Context) error {
 	vaultServiceAccount := "vault-operations-sa"
 	vaultNamespace := "vault-stage" // TODO: Make this configurable
 
-	client, err := LoginWithKubernetesAuthAndServiceAccount(ctx, rm.Client, rm.VaultAddress, rm.VaultRole, vaultServiceAccount, vaultNamespace)
+	vClient, err := LoginWithKubernetesAuthAndServiceAccount(ctx, rm.Client, rm.VaultAddress, rm.VaultRole, vaultServiceAccount, vaultNamespace)
 	if err != nil {
 		return err
 	}
-	rm.vaultClient = client
+	rm.vaultClient = vClient
 
 	if rm.DryRun {
 		rm.Logger.Info("🧪 [DRY RUN] Vault authentication successful - will test API queries but skip destructive operations")
@@ -141,7 +139,7 @@ func (rm *RestartManager) authenticateVault(ctx context.Context) error {
 }
 
 // verifyClusterHealth checks Vault cluster health using raft autopilot
-func (rm *RestartManager) verifyClusterHealth(ctx context.Context) (*ClusterHealth, error) {
+func (rm *RestartManager) verifyClusterHealth(_ context.Context) (*ClusterHealth, error) {
 	if rm.DryRun {
 		rm.Logger.Info("[DRY RUN] Testing cluster health verification using real Vault API calls")
 	}
@@ -334,6 +332,9 @@ func (rm *RestartManager) identifyNodes(ctx context.Context, statefulSetName str
 }
 
 // mapAddressToPodName maps a Vault cluster address to a Kubernetes pod name
+// Currently unused but kept for potential future address-to-pod mapping needs
+//
+//nolint:unused // Reserved for future use
 func (rm *RestartManager) mapAddressToPodName(address string, pods []string) string {
 	// Try to extract pod name from address
 	// Examples:
@@ -452,7 +453,7 @@ func (rm *RestartManager) restartFollowerPods(ctx context.Context, followers []s
 }
 
 // stepDownLeader performs Vault leader step-down
-func (rm *RestartManager) stepDownLeader(ctx context.Context) error {
+func (rm *RestartManager) stepDownLeader(_ context.Context) error {
 	rm.Logger.Info("Stepping down Vault leader")
 
 	if rm.DryRun {
@@ -486,15 +487,10 @@ func (rm *RestartManager) stepDownLeader(ctx context.Context) error {
 		defer rm.vaultClient.SetNamespace(originalNamespace)
 	}
 
-	// Call vault operator step-down using raw request to ensure POST method
-	req := rm.vaultClient.NewRequest("POST", "/v1/sys/step-down")
-	resp, err := rm.vaultClient.RawRequest(req)
+	// Use the recommended higher-level API instead of deprecated RawRequest
+	err = rm.vaultClient.Sys().StepDown()
 	if err != nil {
 		return fmt.Errorf("failed to execute step-down: %w", err)
-	}
-
-	if resp != nil {
-		resp.Body.Close()
 	}
 
 	// Brief wait for leader election to settle
@@ -589,7 +585,7 @@ func (rm *RestartManager) waitForPodReady(ctx context.Context, podName string) e
 }
 
 // verifyFinalState performs comprehensive post-restart verification
-func (rm *RestartManager) verifyFinalState(ctx context.Context) error {
+func (rm *RestartManager) verifyFinalState(ctx context.Context) {
 	rm.Logger.Info("Starting comprehensive post-restart verification...")
 
 	if rm.DryRun {
@@ -597,16 +593,13 @@ func (rm *RestartManager) verifyFinalState(ctx context.Context) error {
 		rm.Logger.Info("🧪 [DRY RUN] Would check cluster health")
 		rm.Logger.Info("🧪 [DRY RUN] Would verify leader election stability")
 		rm.Logger.Info("🧪 [DRY RUN] Would verify Vault services")
-		return nil
+		return
 	}
 
 	// Perform comprehensive verification with graceful degradation
-	if err := rm.performFinalVerificationWithFallback(ctx); err != nil {
-		return fmt.Errorf("final verification failed: %w", err)
-	}
+	rm.performFinalVerificationWithFallback(ctx)
 
 	rm.Logger.Info("🎉 Vault cluster restart completed successfully!")
-	return nil
 }
 
 // waitForStableLeader waits for a stable leader election
@@ -760,7 +753,7 @@ func (rm *RestartManager) performRobustFinalVerification(ctx context.Context) er
 }
 
 // performFinalVerificationWithFallback tries comprehensive verification with graceful degradation
-func (rm *RestartManager) performFinalVerificationWithFallback(ctx context.Context) error {
+func (rm *RestartManager) performFinalVerificationWithFallback(ctx context.Context) {
 	// Try comprehensive verification first
 	if err := rm.performRobustFinalVerification(ctx); err != nil {
 		rm.Logger.Info("Comprehensive verification failed, trying basic checks", "error", err)
@@ -772,7 +765,7 @@ func (rm *RestartManager) performFinalVerificationWithFallback(ctx context.Conte
 			if err == nil && health.Healthy {
 				rm.Logger.Info("✅ Basic health verification passed (fallback)",
 					"attempt", i+1, "details", health.Details)
-				return nil
+				return
 			}
 
 			rm.Logger.Info("Basic health check failed, retrying...",
@@ -782,8 +775,5 @@ func (rm *RestartManager) performFinalVerificationWithFallback(ctx context.Conte
 
 		// If even basic checks fail, log warning but don't fail the operation
 		rm.Logger.Info("⚠️ Final verification could not be completed, but restart sequence finished successfully. Manual verification recommended.")
-		return nil
 	}
-
-	return nil
 }
