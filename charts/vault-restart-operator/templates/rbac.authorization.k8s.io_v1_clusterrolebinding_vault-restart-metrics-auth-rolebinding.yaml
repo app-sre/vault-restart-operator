@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-restart-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vault-restart-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: vault-restart-controller-manager
+  namespace: {{ .Release.Namespace }}

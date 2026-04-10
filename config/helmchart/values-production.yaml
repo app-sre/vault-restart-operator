@@ -1,0 +1,75 @@
+# Production values for vault-restart-operator
+# This file provides recommended settings for production deployments
+
+replicaCount: 1
+
+image:
+  repository: quay.io/app-sre/vault-restart-operator
+  pullPolicy: IfNotPresent
+  tag: "0.0.1"
+
+# Pod security settings (enforced by default)
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - "ALL"
+
+# Production resource limits
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# kube-rbac-proxy sidecar resources
+kube_rbac_proxy:
+  image:
+    repository: quay.io/redhat-cop/kube-rbac-proxy
+    pullPolicy: IfNotPresent
+    tag: v0.11.0
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+# Enable leader election for high availability
+leaderElection:
+  enabled: true
+
+# Enable monitoring in production
+enableMonitoring: true
+
+# Production node affinity (example)
+# nodeSelector:
+#   node-role.kubernetes.io/infra: ""
+
+# Tolerations for running on specific nodes (example)
+# tolerations:
+# - key: "node-role.kubernetes.io/infra"
+#   operator: "Exists"
+#   effect: "NoSchedule"
+
+# Pod anti-affinity for high availability (example)
+# affinity:
+#   podAntiAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#     - weight: 100
+#       podAffinityTerm:
+#         labelSelector:
+#           matchExpressions:
+#           - key: control-plane
+#             operator: In
+#             values:
+#             - controller-manager
+#         topologyKey: kubernetes.io/hostname

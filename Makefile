@@ -246,6 +246,11 @@ ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 GOLANGCI_LINT_VERSION ?= v2.1.0
+HELM_VERSION ?= v3.16.0
+
+# Helm-specific variables
+OPERATOR_NAME ?= vault-restart-operator
+HELM ?= $(LOCALBIN)/helm
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -363,3 +368,80 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
+
+##@ Helm Chart
+
+.PHONY: helm
+helm: $(HELM) ## Download helm locally if necessary.
+$(HELM): $(LOCALBIN)
+	@[ -f $(HELM) ] || { \
+	set -e ;\
+	mkdir -p $(dir $(HELM)) ;\
+	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
+	curl -sSLo helm.tar.gz https://get.helm.sh/helm-$(HELM_VERSION)-$${OS}-$${ARCH}.tar.gz ;\
+	tar -zxvf helm.tar.gz ;\
+	mv $${OS}-$${ARCH}/helm $(HELM) ;\
+	rm -rf $${OS}-$${ARCH} helm.tar.gz ;\
+	}
+
+.PHONY: helmchart
+helmchart: helmchart-clean kustomize helm ## Generate Helm chart from kustomize resources
+	@echo "Building Helm chart..."
+	mkdir -p ./charts/$(OPERATOR_NAME)/templates
+	mkdir -p ./charts/$(OPERATOR_NAME)/crds
+	$(KUSTOMIZE) build ./config/helmchart -o ./charts/$(OPERATOR_NAME)/templates
+	@echo "Processing templates..."
+	@# Replace release-namespace placeholder with Helm template
+	@find ./charts/$(OPERATOR_NAME)/templates -type f -name "*.yaml" -exec sed -i 's/release-namespace/{{ .Release.Namespace }}/g' {} \;
+	@# Remove the generated namespace file (we don't want to create namespace in Helm)
+	@rm -f ./charts/$(OPERATOR_NAME)/templates/v1_namespace_*.yaml
+	@# Remove the kustomize-generated deployment (we use our custom template)
+	@rm -f ./charts/$(OPERATOR_NAME)/templates/apps_v1_deployment_*.yaml
+	@# Copy custom Helm templates
+	@cp ./config/helmchart/templates/* ./charts/$(OPERATOR_NAME)/templates/
+	@# Extract CRDs to separate directory
+	@mv ./charts/$(OPERATOR_NAME)/templates/*_customresourcedefinition_* ./charts/$(OPERATOR_NAME)/crds/ 2>/dev/null || true
+	@# Gate monitoring resources behind enableMonitoring flag
+	@for file in ./charts/$(OPERATOR_NAME)/templates/monitoring.coreos.com_*.yaml; do \
+		if [ -f "$$file" ]; then \
+			sed -i '1s/^/{{- if .Values.enableMonitoring }}\n/' "$$file"; \
+			echo "{{- end }}" >> "$$file"; \
+		fi \
+	done
+	@# Substitute version and image in Chart.yaml and values.yaml
+	@version=$(VERSION) envsubst < ./config/helmchart/Chart.yaml.tpl > ./charts/$(OPERATOR_NAME)/Chart.yaml
+	@version=$(VERSION) image_repo=$${IMG%:*} envsubst < ./config/helmchart/values.yaml.tpl > ./charts/$(OPERATOR_NAME)/values.yaml
+	@echo "Linting Helm chart..."
+	$(HELM) lint ./charts/$(OPERATOR_NAME)
+	@echo "Helm chart generated successfully at ./charts/$(OPERATOR_NAME)"
+
+.PHONY: helmchart-clean
+helmchart-clean: ## Clean up generated Helm chart
+	rm -rf ./charts
+
+.PHONY: helmchart-package
+helmchart-package: helmchart ## Package Helm chart for distribution
+	$(HELM) package ./charts/$(OPERATOR_NAME) -d ./charts
+	@echo "Helm chart packaged successfully"
+
+.PHONY: helmchart-repo
+helmchart-repo: helmchart-package ## Generate Helm repository index
+	$(HELM) repo index ./charts
+	@echo "Helm repository index generated at ./charts/index.yaml"
+
+.PHONY: helmchart-test
+helmchart-test: helmchart kind ## Test Helm chart installation in Kind cluster
+	@echo "Testing Helm chart in Kind cluster..."
+	@$(KIND) get clusters | grep -q "$(KIND_CLUSTER)" || $(KIND) create cluster --name $(KIND_CLUSTER)
+	$(HELM) upgrade --install $(OPERATOR_NAME) ./charts/$(OPERATOR_NAME) \
+		--namespace $(OPERATOR_NAME)-system \
+		--create-namespace \
+		--wait \
+		--timeout 5m
+	@echo "Helm chart installed successfully. Checking deployment..."
+	$(KUBECTL) -n $(OPERATOR_NAME)-system get pods
+	$(KUBECTL) -n $(OPERATOR_NAME)-system get deployment
+
+.PHONY: helmchart-uninstall
+helmchart-uninstall: helm ## Uninstall Helm chart from cluster
+	$(HELM) uninstall $(OPERATOR_NAME) -n $(OPERATOR_NAME)-system || true

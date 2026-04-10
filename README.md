@@ -30,7 +30,56 @@ When a certificate in a Secret is updated, the operator performs the following s
 
 ## Deploying the Operator
 
-This is a cluster-level operator that you can deploy in any namespace, vault-restart-operator is recommended.
+This is a cluster-level operator that you can deploy in any namespace, `vault-restart-system` is recommended.
+
+### Deployment Methods
+
+The operator supports multiple deployment methods:
+
+#### 1. Helm Chart (Recommended)
+
+```bash
+# Build the Helm chart
+make helmchart
+
+# Install using Helm
+helm install vault-restart-operator ./charts/vault-restart-operator \
+  --namespace vault-restart-system \
+  --create-namespace \
+  --set image.repository=quay.io/app-sre/vault-restart-operator \
+  --set image.tag=v0.0.1
+```
+
+**Configuration Options:**
+
+```bash
+# Enable Prometheus monitoring
+helm install vault-restart-operator ./charts/vault-restart-operator \
+  --namespace vault-restart-system \
+  --create-namespace \
+  --set enableMonitoring=true
+
+# Customize resource limits
+helm install vault-restart-operator ./charts/vault-restart-operator \
+  --namespace vault-restart-system \
+  --create-namespace \
+  --set resources.limits.memory=1Gi \
+  --set resources.requests.cpu=50m
+```
+
+#### 2. Kustomize
+
+```bash
+# Deploy directly using kustomize
+make deploy IMG=quay.io/app-sre/vault-restart-operator:v0.0.1
+```
+
+#### 3. OLM Bundle
+
+```bash
+# Build and push bundle
+make bundle bundle-build bundle-push IMG=quay.io/app-sre/vault-restart-operator:v0.0.1
+```
 
 ## VaultRestart CR
 
@@ -111,10 +160,23 @@ spec:
 
 ## Development
 
-## Building the Operator
+### Building the Operator
 
 ```bash
-make docker-build docker-push IMG=""
+make docker-build docker-push IMG=quay.io/app-sre/vault-restart-operator:v0.0.1
+```
+
+### Building the Helm Chart
+
+```bash
+# Generate the Helm chart
+make helmchart
+
+# Package for distribution
+make helmchart-package
+
+# Test in Kind cluster
+make helmchart-test
 ```
 
 ## Local Development
