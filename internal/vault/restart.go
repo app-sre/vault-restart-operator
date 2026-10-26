@@ -124,7 +124,7 @@ func (rm *RestartManager) authenticateVault(ctx context.Context) error {
 
 	// Use vault-operations-sa service account for Vault authentication
 	vaultServiceAccount := "vault-operations-sa"
-	vaultNamespace := "vault-stage" // TODO: Make this configurable
+	vaultNamespace := rm.Namespace
 
 	vClient, err := LoginWithKubernetesAuthAndServiceAccount(ctx, rm.Client, rm.VaultAddress, rm.VaultRole, vaultServiceAccount, vaultNamespace)
 	if err != nil {

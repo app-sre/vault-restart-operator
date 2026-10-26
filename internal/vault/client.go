@@ -88,8 +88,9 @@ func LoginWithKubernetesAuthAndToken(ctx context.Context, vaultAddr, role, jwtTo
 	config.Address = vaultAddr
 	config.Timeout = 30 * time.Second
 
-	// Skip TLS verification for testing
-	logger.Info("Skipping TLS verification for testing")
+	// TLS verification is intentionally skipped because this operator handles
+	// cert rotation - Vault is still serving the old cert while the new CA is
+	// in the secret. Proper verification is impossible in this window.
 	if err := config.ConfigureTLS(&vaultapi.TLSConfig{
 		Insecure: true,
 	}); err != nil {
