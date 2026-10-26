@@ -1,3 +1,8 @@
+# Container image variables for app-sre CI
+IMAGE_NAME := quay.io/app-sre/vault-restart-operator
+IMAGE_TAG := $(shell git rev-parse --short=7 HEAD)
+DOCKER_CONF ?= $(PWD)/.docker
+
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
@@ -176,6 +181,16 @@ docker-build: ## Build docker image with the manager.
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: image-build
+image-build: ## Build container image for app-sre CI.
+	$(CONTAINER_TOOL) build --no-cache -t $(IMAGE_NAME):$(IMAGE_TAG) .
+
+.PHONY: image-push
+image-push: ## Push container image for app-sre CI.
+	$(CONTAINER_TOOL) tag $(IMAGE_NAME):$(IMAGE_TAG) $(IMAGE_NAME):latest
+	$(CONTAINER_TOOL) --config=$(DOCKER_CONF) push $(IMAGE_NAME):$(IMAGE_TAG)
+	$(CONTAINER_TOOL) --config=$(DOCKER_CONF) push $(IMAGE_NAME):latest
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
