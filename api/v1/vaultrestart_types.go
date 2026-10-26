@@ -83,14 +83,12 @@ type VaultRestartStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:resource:scope=Namespaced,shortName=vr
-//+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-//+kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".spec.reason"
-//+kubebuilder:printcolumn:name="StatefulSet",type="string",JSONPath=".spec.statefulSetName"
-//+kubebuilder:printcolumn:name="Secret",type="string",JSONPath=".spec.secretName"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:resource:scope=Namespaced,shortName=vr
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".spec.reason"
+// +kubebuilder:printcolumn:name="StatefulSet",type="string",JSONPath=".spec.statefulSetName"
+// +kubebuilder:printcolumn:name="Secret",type="string",JSONPath=".spec.secretName"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // VaultRestart is the Schema for the vaultrestarts API
 type VaultRestart struct {

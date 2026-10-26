@@ -49,6 +49,8 @@ const (
 	PhaseInProgress                = "InProgress"
 	PhaseCompleted                 = "Completed"
 	PhaseFailed                    = "Failed"
+
+	vaultAppLabel = "vault"
 )
 
 // VaultRestartReconciler reconciles a VaultRestart object
@@ -149,7 +151,7 @@ func (r *VaultRestartReconciler) vaultRoutePredicate() predicate.Predicate {
 		if !ok {
 			return false
 		}
-		return route.GetLabels()["app.kubernetes.io/name"] == "vault"
+		return route.GetLabels()["app.kubernetes.io/name"] == vaultAppLabel
 	})
 }
 
@@ -291,7 +293,7 @@ func (r *VaultRestartReconciler) initializeVaultRestart(ctx context.Context, vr 
 	}
 
 	logger.Info("Initialized VaultRestart", "name", vr.Name, "secretHash", vr.Status.SecretHash)
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 // Handle pending phase - start the restart process
@@ -356,7 +358,7 @@ func (r *VaultRestartReconciler) handleCertPropagationWait(ctx context.Context, 
 	}
 
 	logger.Info("Certificate propagation complete, moving to cluster validation", "name", vr.Name)
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 // Handle cluster validation
@@ -393,7 +395,7 @@ func (r *VaultRestartReconciler) handleClusterValidation(ctx context.Context, vr
 	}
 
 	logger.Info("VaultRestart moved to InProgress phase", "name", vr.Name)
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 // Handle restart execution
@@ -454,7 +456,7 @@ func (r *VaultRestartReconciler) validateCertUtilsOperatorComplete(ctx context.C
 	routes := &routev1.RouteList{}
 	err = r.List(ctx, routes, &client.ListOptions{
 		Namespace: vr.Namespace,
-	}, client.MatchingLabels{"app.kubernetes.io/name": "vault"})
+	}, client.MatchingLabels{"app.kubernetes.io/name": vaultAppLabel})
 	if err != nil {
 		return fmt.Errorf("failed to list vault routes: %w", err)
 	}
@@ -548,7 +550,7 @@ func (r *VaultRestartReconciler) validateVaultClusterHealth(ctx context.Context,
 	pods := &corev1.PodList{}
 	err := r.List(ctx, pods, &client.ListOptions{
 		Namespace: vr.Namespace,
-	}, client.MatchingLabels{"app.kubernetes.io/name": "vault"})
+	}, client.MatchingLabels{"app.kubernetes.io/name": vaultAppLabel})
 	if err != nil {
 		return fmt.Errorf("failed to list vault pods: %w", err)
 	}
